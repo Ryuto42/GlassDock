@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>ja</string>
+	</array>
+	<key>CFBundleExecutable</key>
+	<string>GlassDock</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.ryuto.GlassDock</string>
+	<key>CFBundleName</key>
+	<string>GlassDock</string>
+	<key>CFBundleDisplayName</key>
+	<string>GlassDock</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>26.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Used to show and control the song that is playing (Spotify and Music), empty the Trash, and switch dark mode.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Shows today's and upcoming events in the Calendar widget.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Shows incomplete items in the Reminders widget.</string>
+	<key>NSLocationUsageDescription</key>
+	<string>Shows the weather for your current location in the Weather widget.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Shows the weather for your current location in the Weather widget.</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 Ryuto42. GPL-3.0</string>
+	<key>SUFeedURL</key>
+	<string>https://github.com/Ryuto42/GlassDock/releases/latest/download/appcast.xml</string>
+	<key>SURequireSignedFeed</key>
+	<true/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+</dict>
+</plist>

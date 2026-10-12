@@ -1,0 +1,31 @@
+name: 不具合の報告
+description: 動作がおかしいときに報告してください
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 何が起きましたか
+      description: 期待した動作と、実際の動作を書いてください
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 再現手順
+      placeholder: |
+        1. ...
+        2. ...
+  - type: input
+    id: version
+    attributes:
+      label: GlassDock のバージョン
+      description: 設定 → 一般 → アップデート に表示されています
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS のバージョン
+    validations:
+      required: true

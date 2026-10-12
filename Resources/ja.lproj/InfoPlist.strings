@@ -1,0 +1,5 @@
+"NSAppleEventsUsageDescription" = "再生中の曲の表示と操作（Spotify・ミュージック）、ゴミ箱を空にする、ダークモードの切り替えに使います。";
+"NSCalendarsFullAccessUsageDescription" = "カレンダーウィジェットに今日と今後の予定を表示します。";
+"NSRemindersFullAccessUsageDescription" = "リマインダーウィジェットに未完了の項目を表示します。";
+"NSLocationUsageDescription" = "天気ウィジェットで現在地の天気を表示します。";
+"NSLocationWhenInUseUsageDescription" = "天気ウィジェットで現在地の天気を表示します。";
