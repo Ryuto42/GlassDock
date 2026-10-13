@@ -29,7 +29,8 @@ for lproj in Resources/*.lproj; do ditto "$lproj" "$APP/Contents/Resources/$(bas
 
 PLIST="$APP/Contents/Info.plist"
 [[ -n "${VERSION:-}" ]] && /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$PLIST"
-[[ -n "${BUILD:-}" ]] && /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" "$PLIST"
+# Sparkle は CFBundleVersion で新旧を比べるため、手元のビルドも日時にして公開版より古く見えないようにする
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD:-$(date +%Y%m%d%H%M)}" "$PLIST"
 
 # アップデート検証用の公開鍵（秘密ではない）。scripts/setup-sparkle-keys.sh で作る
 if [[ -s Resources/sparkle-public-key.txt ]]; then

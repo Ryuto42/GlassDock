@@ -9,6 +9,7 @@ final class UpdateController {
     static let shared = UpdateController()
 
     @ObservationIgnored private let controller: SPUStandardUpdaterController
+    @ObservationIgnored private let driverDelegate = UpdateDriverDelegate()
 
     // 公開鍵が埋め込まれていないビルド（ローカルの開発ビルドなど）ではアップデートを無効にする
     static var isConfigured: Bool {
@@ -22,7 +23,7 @@ final class UpdateController {
     }
 
     private init() {
-        controller = SPUStandardUpdaterController(startingUpdater: Self.isConfigured, updaterDelegate: nil, userDriverDelegate: nil)
+        controller = SPUStandardUpdaterController(startingUpdater: Self.isConfigured, updaterDelegate: nil, userDriverDelegate: driverDelegate)
         automaticallyChecks = Self.isConfigured && controller.updater.automaticallyChecksForUpdates
     }
 
@@ -40,5 +41,16 @@ final class UpdateController {
         let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         return "\(short) (\(build))"
+    }
+}
+
+// GlassDock はメニューバーに常駐するアプリなので、定期確認で見つけた更新の案内が他のウィンドウの後ろに隠れやすい。
+// 案内を出すときは前面に出して気づけるようにする（Sparkle の gentle reminders）
+final class UpdateDriverDelegate: NSObject, SPUStandardUserDriverDelegate {
+    var supportsGentleScheduledUpdateReminders: Bool { true }
+
+    func standardUserDriverWillHandleShowingUpdate(_ handleShowingUpdate: Bool, forUpdate update: SUAppcastItem, state: SPUUserUpdateState) {
+        guard handleShowingUpdate, !state.userInitiated else { return }
+        NSApp.activate(ignoringOtherApps: true)
     }
 }

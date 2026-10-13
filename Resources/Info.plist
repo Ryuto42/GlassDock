@@ -47,6 +47,8 @@
 	<string>https://github.com/Ryuto42/GlassDock/releases/latest/download/appcast.xml</string>
 	<key>SURequireSignedFeed</key>
 	<true/>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUScheduledCheckInterval</key>

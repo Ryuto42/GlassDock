@@ -5,6 +5,7 @@ import CoreLocation
 import Darwin
 import EventKit
 import IOKit.ps
+import MapKit
 import SwiftUI
 
 // Dock に置かれているウィジェットの分だけサービスを動かす
@@ -163,8 +164,8 @@ final class WeatherService: NSObject, CLLocationManagerDelegate {
         guard let loc = locations.last else { return }
         Task { @MainActor in
             self.coordinate = loc.coordinate
-            if let mark = try? await CLGeocoder().reverseGeocodeLocation(loc).first {
-                self.place = mark.locality ?? mark.administrativeArea ?? mark.name ?? ""
+            if let request = MKReverseGeocodingRequest(location: loc), let item = try? await request.mapItems.first {
+                self.place = item.addressRepresentations?.cityName ?? item.name ?? ""
             }
             await self.load(lat: loc.coordinate.latitude, lon: loc.coordinate.longitude)
         }
@@ -186,7 +187,8 @@ final class WeatherService: NSObject, CLLocationManagerDelegate {
 
     private func load(city: String) async {
         var comps = URLComponents(string: "https://geocoding-api.open-meteo.com/v1/search")!
-        comps.queryItems = [.init(name: "name", value: city), .init(name: "count", value: "1"), .init(name: "language", value: "ja")]
+        let language = Bundle.main.preferredLocalizations.first == "ja" ? "ja" : "en"
+        comps.queryItems = [.init(name: "name", value: city), .init(name: "count", value: "1"), .init(name: "language", value: language)]
         if let url = comps.url,
            let (data, _) = try? await URLSession.shared.data(from: url),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -197,9 +199,9 @@ final class WeatherService: NSObject, CLLocationManagerDelegate {
             return
         }
         // Open-Meteo の検索は日本語の地名（「東京」など）を見つけられないため、macOS のジオコーディングで探し直す
-        if let mark = try? await CLGeocoder().geocodeAddressString(city).first, let loc = mark.location {
-            place = mark.locality ?? mark.administrativeArea ?? city
-            await load(lat: loc.coordinate.latitude, lon: loc.coordinate.longitude)
+        if let request = MKGeocodingRequest(addressString: city), let item = try? await request.mapItems.first {
+            place = item.addressRepresentations?.cityName ?? item.name ?? city
+            await load(lat: item.location.coordinate.latitude, lon: item.location.coordinate.longitude)
             return
         }
         status = loc("「%@」が見つかりません", city)

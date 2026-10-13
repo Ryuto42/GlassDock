@@ -25,7 +25,7 @@ enum SystemDock {
     private static func urls(forKey key: String) -> [URL] {
         // 隠している間は書き換えているので、元の並びを読む
         let saved = UserDefaults.standard.dictionary(forKey: savedKey)?[key]
-        let value = saved.flatMap { ($0 as? String) == "__none__" ? nil : $0 } ?? CFPreferencesCopyAppValue(key as CFString, domain)
+        let value: Any? = saved.flatMap { ($0 as? String) == "__none__" ? nil : $0 } ?? CFPreferencesCopyAppValue(key as CFString, domain).map { $0 as Any }
         guard let items = value as? [[String: Any]] else { return [] }
         return items.compactMap { item in
             guard let tile = item["tile-data"] as? [String: Any],
