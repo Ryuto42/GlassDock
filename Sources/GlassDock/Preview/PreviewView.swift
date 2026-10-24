@@ -125,52 +125,91 @@ struct PreviewContent: View {
             MusicPanel(item: item)
                 .padding(13)
         } else if showCards {
+            let layout = gridLayout
             VStack(alignment: .leading, spacing: 8) {
-                header
-                grid
+                header(maxWidth: layout.width - 8)
+                grid(layout)
             }
             .padding(12)
         } else {
-            Text(loc(item.name))
-                .font(.system(size: 13, weight: .medium))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
+            VStack(spacing: 1) {
+                Text(loc(item.name))
+                    .font(.system(size: 13, weight: .medium))
+                if DockModel.shared.isBackground(item) {
+                    Text("バックグラウンドで実行中")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
         }
     }
 
     private var showCards: Bool { DockSettings.shared.previewEnabled && item.isRunning && !state.windows.isEmpty }
 
-    private var header: some View {
+    // 長いアプリ名でパネルがカードより横に広がらないよう、カードの列の幅に収める
+    private func header(maxWidth: CGFloat) -> some View {
         HStack(spacing: 6) {
             Text(loc(item.name)).font(.system(size: 13, weight: .semibold))
+                .lineLimit(1)
             Text("\(state.windows.count)")
                 .font(.system(size: 11, weight: .medium, design: .rounded))
+                .lineLimit(1)
+                .fixedSize()
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 1)
                 .background(Capsule().fill(.primary.opacity(0.08)))
                 .contentTransition(.numericText())
         }
+        .frame(maxWidth: max(maxWidth, 40), alignment: .leading)
         .padding(.horizontal, 4)
     }
 
-    private var grid: some View {
+    private struct GridLayout {
+        let cardWidth: CGFloat
+        let columns: Int
+        let width: CGFloat
+    }
+
+    // WindowCard の幅は width + 余白 16
+    private var gridLayout: GridLayout {
         let cardW = CGFloat(DockSettings.shared.previewSize)
         let horizontal = !settings.position.isVertical
         let available = horizontal ? maxSize.width - 60 : maxSize.width * 0.5
         let columns = max(1, min(state.windows.count, Int(available / (cardW + 22))))
+        let width = CGFloat(columns) * (cardW + 16) + CGFloat(columns - 1) * 10
+        return GridLayout(cardWidth: cardW, columns: columns, width: width)
+    }
+
+    @ViewBuilder private func grid(_ layout: GridLayout) -> some View {
+        let columns = layout.columns
         let rows = stride(from: 0, to: state.windows.count, by: columns).map {
             Array(state.windows[$0..<min($0 + columns, state.windows.count)])
         }
-        return Grid(horizontalSpacing: 10, verticalSpacing: 10) {
+        let icon = DockModel.shared.icon(for: item)
+        let content = Grid(horizontalSpacing: 10, verticalSpacing: 10) {
             ForEach(rows.indices, id: \.self) { r in
                 GridRow {
                     ForEach(rows[r]) { window in
-                        WindowCard(window: window, icon: DockModel.shared.icon(for: item), width: cardW)
+                        WindowCard(window: window, icon: icon, width: layout.cardWidth)
                             .transition(.scale(scale: 0.85).combined(with: .opacity))
                     }
                 }
             }
+        }
+        // ウィンドウが多く画面の高さに収まらないときはスクロールさせる（メニューバーと見出しの分を除く）
+        let rowHeight = layout.cardWidth * 0.62 + 32
+        let contentHeight = CGFloat(rows.count) * (rowHeight + 10) - 10
+        let available = max(rowHeight, maxSize.height - 130)
+        if contentHeight > available {
+            ScrollView {
+                content.padding(4)
+            }
+            .frame(maxHeight: available)
+        } else {
+            content
         }
     }
 }

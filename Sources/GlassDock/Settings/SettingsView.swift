@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 final class SettingsWindowController {
     static let shared = SettingsWindowController()
     private var window: NSWindow?
+    private var closeObserver: NSObjectProtocol?
     private let router = SettingsRouter()
 
     func show(tab: SettingsTab = .general) {
@@ -28,10 +29,20 @@ final class SettingsWindowController {
             w.minSize = NSSize(width: 760, height: 520)
             w.center()
             window = w
+            // 閉じている間も画面の更新や Timer が動き続けないよう、閉じたら中身ごと手放す（開いていたタブは router が覚えている）
+            closeObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { _ in
+                MainActor.assumeIsolated { SettingsWindowController.shared.windowWillClose() }
+            }
         }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
         window?.orderFrontRegardless()
+    }
+
+    private func windowWillClose() {
+        if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
+        closeObserver = nil
+        DispatchQueue.main.async { self.window = nil }
     }
 }
 
@@ -244,10 +255,12 @@ struct SliderRow: View {
                 if let step { Slider(value: $value, in: range, step: step) } else { Slider(value: $value, in: range) }
             }
             .frame(width: 220)
+            // 訳や桁で幅が足りなくても「…」で切れないよう、最低幅だけ決めて必要なら広げる
             Text(String(format: loc(format), locale: .current, value * scale))
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
-                .frame(width: 56, alignment: .trailing)
+                .fixedSize()
+                .frame(minWidth: 56, alignment: .trailing)
         }
     }
 }
@@ -265,6 +278,57 @@ struct OptionRow<T: LabeledOption>: View {
             .pickerStyle(.segmented)
             .fixedSize()
         }
+    }
+}
+
+// 「Finder に表示」やフォルダを開くときに使うアプリ
+private struct FileViewerRow: View {
+    @Environment(DockSettings.self) private var settings
+    @State private var candidates: [URL] = []
+    private static let other = "\u{1}other"
+
+    var body: some View {
+        Row(title: "フォルダを開くアプリ") {
+            Picker("フォルダを開くアプリ", selection: Binding(get: { settings.fileViewer }, set: select)) {
+                Text(loc("自動（%@）", FileViewer.displayName(FileViewer.systemDefault))).tag("")
+                Divider()
+                ForEach(candidates, id: \.self) { url in
+                    if let id = Bundle(url: url)?.bundleIdentifier {
+                        Label {
+                            Text(FileViewer.displayName(url))
+                        } icon: {
+                            Image(nsImage: Self.icon(url))
+                        }
+                        .tag(id)
+                    }
+                }
+                Divider()
+                Text("その他のアプリ…").tag(Self.other)
+            }
+            .labelsHidden()
+            .fixedSize()
+        }
+        .onAppear { candidates = FileViewer.candidates() }
+    }
+
+    private func select(_ id: String) {
+        guard id == Self.other else {
+            settings.fileViewer = id
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.application]
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.prompt = loc("選択")
+        guard panel.runModal() == .OK, let url = panel.url, let picked = Bundle(url: url)?.bundleIdentifier else { return }
+        settings.fileViewer = picked
+        candidates = FileViewer.candidates()
+    }
+
+    private static func icon(_ url: URL) -> NSImage {
+        let image = NSWorkspace.shared.icon(forFile: url.path)
+        image.size = NSSize(width: 16, height: 16)
+        return image
     }
 }
 
@@ -306,6 +370,11 @@ struct DisplayScopeCard: View {
         return list.map { (id: $0.0, name: $0.1) }
     }
 
+    // メニューの幅は一番長い項目で決まるため、長い名前は縮めて行からはみ出さないようにする
+    private static func short(_ name: String) -> String {
+        name.count > 32 ? String(name.prefix(31)) + "…" : name
+    }
+
     var body: some View {
         @Bindable var r = router
         let custom = DockSettings.shared.customDisplays
@@ -317,7 +386,7 @@ struct DisplayScopeCard: View {
                 Picker("", selection: $r.displayID) {
                     Text("すべて（共通）").tag(String?.none)
                     ForEach(displays, id: \.id) { d in
-                        Text(custom.contains(d.id) ? loc("%@（専用）", d.name) : d.name).tag(Optional(d.id))
+                        Text(custom.contains(d.id) ? loc("%@（専用）", Self.short(d.name)) : Self.short(d.name)).tag(Optional(d.id))
                     }
                 }
                 .labelsHidden()
@@ -378,6 +447,8 @@ private struct GeneralPage: View {
             SwitchRow(title: "起動中にアイコンを弾ませる", isOn: $s.launchBounce)
             RowDivider()
             SwitchRow(title: "Option+Tab でウィンドウを切り替え", isOn: $s.windowSwitcherEnabled)
+            RowDivider()
+            FileViewerRow()
             RowDivider()
             SliderRow(title: "アニメーション速度", value: $s.animationSpeed, range: 0.5...2.0, format: "%.1f×", step: 0.1)
         }
@@ -887,11 +958,14 @@ private struct ItemsPage: View {
                 .opacity(visible?.wrappedValue == false ? 0.4 : 1)
             Text(item.name)
                 .foregroundStyle(visible?.wrappedValue == false ? .secondary : .primary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(item.name)
             Spacer()
             if iconChange {
-                Button("アイコン変更") { model.chooseCustomIcon(for: item) }.buttonStyle(.borderless)
+                Button("アイコン変更") { model.chooseCustomIcon(for: item) }.buttonStyle(.borderless).fixedSize()
                 if model.customIcons[model.iconKey(for: item)] != nil {
-                    Button("元に戻す") { model.setCustomIcon(nil, for: item) }.buttonStyle(.borderless)
+                    Button("元に戻す") { model.setCustomIcon(nil, for: item) }.buttonStyle(.borderless).fixedSize()
                 }
             }
             if let visible {

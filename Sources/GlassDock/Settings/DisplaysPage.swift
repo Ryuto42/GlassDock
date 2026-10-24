@@ -74,14 +74,20 @@ private struct DisplayRow: View {
                 .frame(width: 28)
             VStack(alignment: .leading, spacing: 3) {
                 Text(DockSettings.displayName(id)).font(.system(size: 13, weight: .medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(DockSettings.displayName(id))
                 HStack(spacing: 5) {
                     tag(connected ? "接続中" : "未接続", color: connected ? .green : .gray)
                     if isMain { tag("メイン", color: .blue) }
                     tag(custom ? "専用の設定" : "共通の設定", color: custom ? .purple : .gray)
                     if connected, !effectivelyShown { tag("Dock なし", color: .orange) }
                     if let screen {
+                        // 幅が足りないときは解像度から縮める
                         Text("\(Int(screen.frame.width))×\(Int(screen.frame.height))")
                             .font(.system(size: 10.5)).foregroundStyle(.secondary).monospacedDigit()
+                            .lineLimit(1)
+                            .layoutPriority(-1)
                     }
                 }
             }
@@ -171,5 +177,6 @@ private struct DisplayRow: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 1.5)
             .background(Capsule().fill(color.opacity(0.15)))
+            .fixedSize()
     }
 }

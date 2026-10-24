@@ -37,6 +37,8 @@
 	<string>Shows today's and upcoming events in the Calendar widget.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
 	<string>Shows incomplete items in the Reminders widget.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Shows recent files and notifies you of new downloads on the Downloads folder in the Dock.</string>
 	<key>NSLocationUsageDescription</key>
 	<string>Shows the weather for your current location in the Weather widget.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>

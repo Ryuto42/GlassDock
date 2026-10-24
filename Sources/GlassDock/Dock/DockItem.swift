@@ -16,8 +16,11 @@ struct DockItem: Identifiable, Equatable {
     var bundleID: String?
     var isPinned: Bool
     var runningApp: NSRunningApplication?
+    // 本体が終了したあとも残っているプロセス（LingeringApps）
+    var lingeringPIDs: [pid_t] = []
 
     var isRunning: Bool { runningApp != nil }
+    var isLingering: Bool { !lingeringPIDs.isEmpty }
 
     var url: URL? {
         switch kind {
@@ -37,8 +40,8 @@ struct DockItem: Identifiable, Equatable {
     static func app(url: URL, pinned: Bool, running: NSRunningApplication? = nil) -> DockItem {
         let bundle = Bundle(url: url)
         let id = bundle?.bundleIdentifier ?? running?.bundleIdentifier
-        let name = running?.localizedName
-            ?? FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: "")
+        let display = FileManager.default.displayName(atPath: url.path)
+        let name = running?.localizedName ?? (display.hasSuffix(".app") ? String(display.dropLast(4)) : display)
         return DockItem(
             id: "app:" + (id ?? url.path),
             kind: .app(url),
@@ -72,5 +75,6 @@ struct DockItem: Identifiable, Equatable {
 
     nonisolated static func == (a: DockItem, b: DockItem) -> Bool {
         a.id == b.id && a.isPinned == b.isPinned && a.runningApp?.processIdentifier == b.runningApp?.processIdentifier
+            && a.lingeringPIDs == b.lingeringPIDs
     }
 }

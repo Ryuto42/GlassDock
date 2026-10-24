@@ -6,6 +6,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 VERSION="${1:?使い方: scripts/release.sh <バージョン>  例: 1.0.1}"
+# タグ・URL・Info.plist にそのまま入るため、数字と点だけに限る
+[[ "$VERSION" =~ '^[0-9]+(\.[0-9]+){1,3}$' ]] || { echo "バージョンは 1.0.1 のような形で指定してください: $VERSION" >&2; exit 1; }
 REPO="Ryuto42/GlassDock"
 TOOLS=".build/artifacts/sparkle/Sparkle/bin"
 
@@ -36,6 +38,9 @@ ditto -c -k --sequesterRsrc --keepParent build/GlassDock.app "$ZIP"
   --download-url-prefix "https://github.com/$REPO/releases/download/v$VERSION/" \
   --link "https://github.com/$REPO" \
   dist
+
+# アプリは署名のない appcast.xml を受け付けない（SURequireSignedFeed）ため、署名されているか確かめる
+grep -q "sparkle-signatures:" dist/appcast.xml || { echo "appcast.xml に署名がありません。generate_appcast の出力を確認してください" >&2; exit 1; }
 
 shasum -a 256 "$ZIP"
 cat <<MSG

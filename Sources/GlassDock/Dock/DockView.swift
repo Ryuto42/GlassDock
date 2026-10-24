@@ -38,7 +38,7 @@ final class DockVisibility {
     var revealed = true {
         didSet { if oldValue != revealed { DockPanelController.shared.updateWidgetVisibility() } }
     }
-    var hovering = false
+    @ObservationIgnored var hovering = false
     @ObservationIgnored var isMouseInside: () -> Bool = { false }
     @ObservationIgnored var isMouseAtEdge: () -> Bool = { false }
     // 隠したときにカーソルが画面の端に残っていたら、そこから動かすまで端に触れても出さない
@@ -51,10 +51,14 @@ final class DockVisibility {
     }
 
     func scheduleHide(after delay: TimeInterval = 0.5) {
-        guard settings.autoHide else { return }
+        // 自動的に隠すを切ったときは、待っている非表示を取り消して表示状態に戻す（次に入れたときに急に消えないように）
+        guard settings.autoHide else {
+            reveal()
+            return
+        }
         hideWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self, !self.hovering, !PreviewController.shared.isVisible else { return }
+            guard let self, self.settings.autoHide, !self.hovering, !PreviewController.shared.isVisible else { return }
             // 端から出しただけでバーの上に来ていない、またはカーソルが止まったままの場合もここで判定する
             if self.isMouseInside() {
                 self.scheduleHide()
@@ -93,9 +97,12 @@ final class DockHoverWatcher {
     private var monitors: [Any] = []
     private var timer: Timer?
     private var onExit: (() -> Void)?
+    private var onMove: ((CGPoint) -> Void)?
 
-    // 透明部分のイベントは自分のウィンドウに届くこともあるため、ローカルとグローバルの両方を見る
-    func begin(onExit: @escaping () -> Void) {
+    // 透明部分のイベントは自分のウィンドウに届くこともあるため、ローカルとグローバルの両方を見る。
+    // 画面の最下端などでは SwiftUI のホバーがしばらく届かないことがあるので、ここで見た位置も onMove で渡す
+    func begin(onMove: @escaping (CGPoint) -> Void, onExit: @escaping () -> Void) {
+        self.onMove = onMove
         self.onExit = onExit
         guard monitors.isEmpty else { return }
         let mask: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged]
@@ -121,6 +128,7 @@ final class DockHoverWatcher {
         timer?.invalidate()
         timer = nil
         onExit = nil
+        onMove = nil
     }
 
     func edgeContainsMouse(_ position: DockPosition) -> Bool {
@@ -136,6 +144,10 @@ final class DockHoverWatcher {
 
     func containsMouse() -> Bool {
         guard let win = window, win.isVisible else { return false }
+        return barContainsMouse(in: win)
+    }
+
+    private func barContainsMouse(in win: NSWindow) -> Bool {
         let p = NSEvent.mouseLocation
         let local = CGPoint(x: p.x - win.frame.minX, y: win.frame.maxY - p.y)
         return barRect.insetBy(dx: -2, dy: -2).contains(local)
@@ -143,9 +155,11 @@ final class DockHoverWatcher {
 
     private func check() {
         guard onExit != nil, let win = window else { return }
-        let p = NSEvent.mouseLocation
-        let local = CGPoint(x: p.x - win.frame.minX, y: win.frame.maxY - p.y)
-        guard !barRect.insetBy(dx: -2, dy: -2).contains(local) else { return }
+        if barContainsMouse(in: win) {
+            let p = NSEvent.mouseLocation
+            onMove?(CGPoint(x: p.x - win.frame.minX, y: win.frame.maxY - p.y))
+            return
+        }
         let exit = onExit
         // モニタのコールバック中に自身を外さないよう、次のループで終了させる
         DispatchQueue.main.async { [weak self] in
@@ -200,6 +214,8 @@ struct DockRootView: View {
     @Environment(DockModel.self) private var model
     @Environment(DockContext.self) private var context
     private var visibility: DockVisibility { context.visibility }
+    // ほぼ透明な部分はマウスイベントが下のアプリへ抜ける。8 ビットに丸めても 0 にならず、目には見えない濃さにする
+    static let hitAlpha = 0.008
 
     var body: some View {
         GeometryReader { geo in
@@ -210,7 +226,7 @@ struct DockRootView: View {
                     .offset(hidden ? pos.inward(-(metrics.barThickness + 24)) : .zero)
                     .opacity(hidden ? 0 : 1)
                 if hidden {
-                    Color.black.opacity(0.001)
+                    Color.black.opacity(Self.hitAlpha)
                         .frame(width: pos.isVertical ? 4 : nil, height: pos.isVertical ? nil : 4)
                         .onContinuousHover(coordinateSpace: .named("dockWindow")) { phase in
                             switch phase {
@@ -252,6 +268,7 @@ struct DockBar: View {
         let scales = magnification()
         let barThickness = metrics.barThickness
         let crossLength = (scales.map { base + (CGFloat(settings.maxIconSize) - base) * $0 }.max() ?? base) + metrics.lift
+        let crossThickness = crossLength + pad * 2 + metrics.labelHeight + margin
         let taskbar = settings.layoutStyle == .taskbar
 
         layout {
@@ -273,8 +290,8 @@ struct DockBar: View {
         }
         .padding(pos.alongEdges, max(pad - CGFloat(settings.spacing) / 2, 0))
         .frame(
-            width: pos.isVertical ? crossLength + pad * 2 + metrics.labelHeight + margin : nil,
-            height: pos.isVertical ? nil : crossLength + pad * 2 + metrics.labelHeight + margin,
+            width: pos.isVertical ? crossThickness : nil,
+            height: pos.isVertical ? nil : crossThickness,
             alignment: pos.alignment
         )
         .frame(maxWidth: taskbar && !pos.isVertical ? .infinity : nil,
@@ -287,9 +304,9 @@ struct DockBar: View {
         }
         // 画面の端まで含めてホバー判定にする（拡大で上に出た部分はホバー中だけ）
         .background(alignment: pos.alignment) {
-            Color.black.opacity(0.001)
-                .frame(width: pos.isVertical ? barThickness + metrics.edgeMargin : nil,
-                       height: pos.isVertical ? nil : barThickness + metrics.edgeMargin)
+            Color.black.opacity(DockRootView.hitAlpha)
+                .frame(width: pos.isVertical ? barThickness + margin : nil,
+                       height: pos.isVertical ? nil : barThickness + margin)
         }
         .background(Color.black.opacity(hovering ? 0.001 : 0))
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { context.watcher.barRect = $0 }
@@ -300,17 +317,11 @@ struct DockBar: View {
             case .active(let p):
                 if !hovering {
                     hovering = true
-                    context.watcher.begin { endHover() }
+                    context.watcher.begin(onMove: { track($0, fromWatcher: true) }) { endHover() }
                 }
                 context.visibility.hovering = true
                 context.visibility.reveal()
-                guard settings.magnificationStyle != .none, model.draggingID == nil else { return }
-                let v = pos.isVertical ? p.y : p.x
-                if mouse == nil {
-                    withAnimation(settings.spring(0.22, damping: 0.85)) { mouse = v }
-                } else if abs((mouse ?? v) - v) >= 0.5 {
-                    withAnimation(.interactiveSpring(response: 0.12 / settings.animationSpeed, dampingFraction: 0.9)) { mouse = v }
-                }
+                track(p, fromWatcher: false)
             case .ended:
                 context.watcher.end()
                 endHover()
@@ -328,6 +339,33 @@ struct DockBar: View {
             Button("GlassDock を終了") { NSApp.terminate(nil) }
         }
         .animation(settings.spring(), value: model.items.map(\.id))
+    }
+
+    private func track(_ p: CGPoint, fromWatcher: Bool) {
+        guard model.draggingID == nil else { return }
+        let pos = settings.position
+        if fromWatcher { hoverIcon(at: p) }
+        guard settings.magnificationStyle != .none else { return }
+        let v = pos.isVertical ? p.y : p.x
+        if mouse == nil {
+            withAnimation(settings.spring(0.22, damping: 0.85)) { mouse = v }
+        } else if abs((mouse ?? v) - v) >= 0.5 {
+            withAnimation(.interactiveSpring(response: 0.12 / max(settings.animationSpeed, 0.1), dampingFraction: 0.9)) { mouse = v }
+        }
+    }
+
+    // アイコンの onHover が届かないあいだも、カーソルの下のアイコンに切り替える
+    private func hoverIcon(at p: CGPoint) {
+        let vertical = settings.position.isVertical
+        let frames = PreviewController.shared.iconFrames
+        guard let item = model.items.first(where: { item in
+            guard item.kind != .divider, let f = frames[context.key(item.id)] else { return false }
+            return vertical ? (p.y >= f.minY && p.y < f.maxY) : (p.x >= f.minX && p.x < f.maxX)
+        }), model.hoveredID != item.id || model.hoveredContextID != context.id else { return }
+        model.clearFreshDownloads(item)
+        model.hoveredID = item.id
+        if model.hoveredContextID != context.id { model.hoveredContextID = context.id }
+        PreviewController.shared.hoverBegan(item, in: context)
     }
 
     private func endHover() {
@@ -462,7 +500,7 @@ struct DockIconView: View, Equatable {
                 if inside {
                     model.clearFreshDownloads(item)
                     model.hoveredID = item.id
-                    model.hoveredContextID = context.id
+                    if model.hoveredContextID != context.id { model.hoveredContextID = context.id }
                     PreviewController.shared.hoverBegan(item, in: context)
                 } else if isHovered {
                     model.hoveredID = nil
@@ -515,8 +553,9 @@ struct DockIconView: View, Equatable {
     private var dimmed: Bool {
         guard case .app = item.kind else { return false }
         if settings.dimInactive && !item.isRunning { return true }
+        if model.isBackground(item) { return true }
         // 最小化中・非表示中のアプリは少し薄くする
-        return settings.dimMinimized && (model.isMinimized(item) || item.runningApp?.isHidden == true)
+        return settings.dimMinimized && (model.isMinimized(item) || model.isHidden(item))
     }
 
     private var hoverGlow: Color {
@@ -563,7 +602,7 @@ struct DockIconView: View, Equatable {
     }
 
     @ViewBuilder private var cardBackground: some View {
-        if item.isRunning, settings.indicator == .card {
+        if item.isRunning || item.isLingering, settings.indicator == .card {
             RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
                 .fill(IconColor.average(model.icon(for: item), key: item.id).opacity(0.38))
                 .frame(width: size + metrics.padding * 1.2, height: size + metrics.padding * 1.2)
@@ -573,15 +612,16 @@ struct DockIconView: View, Equatable {
     }
 
     @ViewBuilder private var indicator: some View {
-        if item.isRunning, item.widgetKind == nil {
+        if item.isRunning || item.isLingering, item.widgetKind == nil {
             let vertical = settings.position.isVertical
-            let color = settings.indicatorColor.opacity(item.runningApp?.isHidden == true ? 0.4 : 0.8)
+            let color = settings.indicatorColor.opacity(model.isHidden(item) || model.isBackground(item) ? 0.4 : 0.8)
             let d = metrics.padding / 2 + 2
             switch settings.indicator {
             case .dot, .bar:
-                // ウィンドウの数だけ丸（バー）を並べる。最大3つ
+                // ウィンドウの数だけ丸（バー）を並べる。最大3つ。小さいアイコンでも隣の印と重ならないよう、アイコンの幅に収める
                 let count = settings.indicatorShowsWindowCount ? min(max(model.windowCount(item), 1), 3) : 1
-                let long: CGFloat = settings.indicator == .bar ? max(8, size * (count > 1 ? 0.16 : 0.3)) : 4
+                let fit = (size - 3 * CGFloat(count - 1)) / CGFloat(count)
+                let long: CGFloat = settings.indicator == .bar ? max(4, min(max(8, size * (count > 1 ? 0.16 : 0.3)), fit)) : 4
                 let layout = vertical ? AnyLayout(VStackLayout(spacing: 3)) : AnyLayout(HStackLayout(spacing: 3))
                 layout {
                     ForEach(0..<count, id: \.self) { _ in
@@ -623,10 +663,7 @@ struct DockIconView: View, Equatable {
         if let text = model.badge(for: item) {
             Text(text.count > 3 ? "•••" : text)
                 .font(.system(size: max(10, size * 0.21), weight: .semibold, design: .rounded))
-                .foregroundStyle(.white)
-                .padding(.horizontal, text.count > 1 ? 5 : 0)
-                .frame(minWidth: max(16, size * 0.34), minHeight: max(16, size * 0.34))
-                .background(Capsule().fill(settings.badgeColor.gradient))
+                .modifier(BadgeCapsule(size: size, wide: text.count > 1, fill: settings.badgeColor.gradient))
                 .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
                 .offset(x: 4, y: -3)
                 .transition(.scale.combined(with: .opacity))
@@ -638,6 +675,9 @@ struct DockIconView: View, Equatable {
 enum IconColor {
     private static var cache: [String: Color] = [:]
 
+    // アイコンを描き直したとき（外観の切り替え・アイコンの変更）に色も求め直す
+    static func reset() { cache.removeAll() }
+
     static func average(_ image: NSImage, key: String) -> Color {
         if let c = cache[key] { return c }
         var rgba = [UInt8](repeating: 0, count: 4)
@@ -648,7 +688,7 @@ enum IconColor {
             ctx.interpolationQuality = .medium
             ctx.draw(cg, in: CGRect(x: 0, y: 0, width: 1, height: 1))
             let a = max(Double(rgba[3]) / 255, 0.01)
-            color = Color(red: Double(rgba[0]) / 255 / a, green: Double(rgba[1]) / 255 / a, blue: Double(rgba[2]) / 255 / a)
+            color = Color(red: min(Double(rgba[0]) / 255 / a, 1), green: min(Double(rgba[1]) / 255 / a, 1), blue: min(Double(rgba[2]) / 255 / a, 1))
         } else {
             color = .gray
         }
@@ -664,18 +704,17 @@ struct FreshDownloadBadge: View {
     @State private var ripple = 0
 
     var body: some View {
-        let d = max(16, size * 0.34)
+        let d = badgeDiameter(size)
         HStack(spacing: 1) {
             Image(systemName: "arrow.down")
                 .font(.system(size: d * 0.5, weight: .bold))
             if count > 1 {
-                Text("\(count)").font(.system(size: d * 0.55, weight: .semibold, design: .rounded))
+                Text(count > 99 ? "99+" : "\(count)")
+                    .font(.system(size: d * 0.55, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
             }
         }
-        .foregroundStyle(.white)
-        .padding(.horizontal, count > 1 ? 5 : 0)
-        .frame(minWidth: d, minHeight: d)
-        .background(Capsule().fill(Color.accentColor.gradient))
+        .modifier(BadgeCapsule(size: size, wide: count > 1, fill: Color.accentColor.gradient))
         .background {
             Capsule()
                 .stroke(Color.accentColor, lineWidth: 2)
@@ -693,6 +732,26 @@ struct FreshDownloadBadge: View {
         .transition(.scale(scale: 0.2).combined(with: .opacity))
         .onAppear { ripple += 1 }
         .onChange(of: count) { ripple += 1 }
+    }
+}
+
+private func badgeDiameter(_ size: CGFloat) -> CGFloat { max(16, size * 0.34) }
+
+// バッジの丸。数字が増えてもアイコンの幅に押し込まれて折り返さないよう、中身の幅で横に伸ばす
+struct BadgeCapsule<Fill: ShapeStyle>: ViewModifier {
+    let size: CGFloat
+    let wide: Bool
+    let fill: Fill
+
+    func body(content: Content) -> some View {
+        let d = badgeDiameter(size)
+        content
+            .lineLimit(1)
+            .fixedSize()
+            .foregroundStyle(.white)
+            .padding(.horizontal, wide ? 5 : 0)
+            .frame(minWidth: d, minHeight: d)
+            .background(Capsule().fill(fill))
     }
 }
 
@@ -721,22 +780,34 @@ struct OptionalShadow: ViewModifier {
     }
 }
 
+// 起動が終わっても途中で止めず、いま跳ねている1回を下まで戻してから止める
 struct BounceModifier: ViewModifier {
     let active: Bool
     let position: DockPosition
     let size: CGFloat
+    @State private var lift: CGFloat = 0
+    @State private var running = false
+    // 遅れて実行するクロージャは古い値の構造体を持つため、今の状態は State から読む
+    @State private var wanted = false
 
     func body(content: Content) -> some View {
-        if active {
-            content.keyframeAnimator(initialValue: CGFloat(0), repeating: true) { view, v in
-                view.offset(position.inward(v))
-            } keyframes: { _ in
-                CubicKeyframe(size * 0.45, duration: 0.28)
-                CubicKeyframe(0, duration: 0.28)
-                CubicKeyframe(0, duration: 0.12)
+        content
+            .offset(position.inward(lift))
+            .onChange(of: active, initial: true) { _, on in
+                wanted = on
+                if on, !running { bounce() }
             }
-        } else {
-            content
+    }
+
+    // アニメーションの完了通知は、Dock が隠れて描画されないときなどに届かないことがあるため、時間で進める
+    private func bounce() {
+        running = true
+        withAnimation(.easeOut(duration: 0.28)) { lift = size * 0.45 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
+            withAnimation(.easeIn(duration: 0.28)) { lift = 0 }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                if wanted { bounce() } else { running = false }
+            }
         }
     }
 }

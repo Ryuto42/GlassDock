@@ -109,6 +109,8 @@ struct WeatherSnapshot: Equatable {
     var sunset: Date?
     var hours: [Hour]
     var days: [Day]
+    // 予報地点のタイムゾーン（都市を指定したとき、時刻や曜日をその土地の時間で出す）
+    var timeZone: TimeZone
 }
 
 @Observable
@@ -118,7 +120,6 @@ final class WeatherService: NSObject, CLLocationManagerDelegate {
 
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var location: CLLocationManager?
-    @ObservationIgnored private var coordinate: CLLocationCoordinate2D?
     @ObservationIgnored private var place = ""
 
     func setActive(_ on: Bool) {
@@ -163,7 +164,6 @@ final class WeatherService: NSObject, CLLocationManagerDelegate {
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let loc = locations.last else { return }
         Task { @MainActor in
-            self.coordinate = loc.coordinate
             if let request = MKReverseGeocodingRequest(location: loc), let item = try? await request.mapItems.first {
                 self.place = item.addressRepresentations?.cityName ?? item.name ?? ""
             }
@@ -189,6 +189,8 @@ final class WeatherService: NSObject, CLLocationManagerDelegate {
         var comps = URLComponents(string: "https://geocoding-api.open-meteo.com/v1/search")!
         let language = Bundle.main.preferredLocalizations.first == "ja" ? "ja" : "en"
         comps.queryItems = [.init(name: "name", value: city), .init(name: "count", value: "1"), .init(name: "language", value: language)]
+        // URLComponents は「+」をエスケープしないため、空白として解釈されないようにする
+        comps.percentEncodedQuery = comps.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
         if let url = comps.url,
            let (data, _) = try? await URLSession.shared.data(from: url),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -231,9 +233,11 @@ final class WeatherService: NSObject, CLLocationManagerDelegate {
             return
         }
         let offset = json["utc_offset_seconds"] as? Int ?? 0
+        // 週の途中で夏時間が切り替わっても正しく読めるよう、固定の時差ではなく地点のタイムゾーンで解釈する
+        let tz = (json["timezone"] as? String).flatMap(TimeZone.init(identifier:)) ?? TimeZone(secondsFromGMT: offset) ?? .current
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(secondsFromGMT: offset)
+        f.timeZone = tz
         f.dateFormat = "yyyy-MM-dd'T'HH:mm"
         let df = DateFormatter()
         df.locale = f.locale
@@ -242,20 +246,24 @@ final class WeatherService: NSObject, CLLocationManagerDelegate {
 
         func nums(_ d: [String: Any], _ k: String) -> [Double] { (d[k] as? [Any])?.map { ($0 as? NSNumber)?.doubleValue ?? 0 } ?? [] }
         func strs(_ d: [String: Any], _ k: String) -> [String] { d[k] as? [String] ?? [] }
+        // 外部の JSON なので、配列の長さがそろっていない・値が大きすぎる場合でも落ちないようにする
+        func int(_ v: Double?) -> Int { v.map { $0.isFinite && abs($0) < 1e9 ? Int($0) : 0 } ?? 0 }
 
         let now = Date()
-        let hTimes = strs(hourly, "time").compactMap(f.date)
+        // 読めない時刻があっても他の配列と位置がずれないよう、compactMap ではなく位置を保ったまま読む
+        let hTimes = strs(hourly, "time").map { f.date(from: $0) }
         let hTemps = nums(hourly, "temperature_2m"), hCodes = nums(hourly, "weather_code"), hDay = nums(hourly, "is_day")
-        let hours = hTimes.indices
-            .filter { hTimes[$0] > now.addingTimeInterval(-3600) && $0 < hTemps.count }
-            .prefix(12)
-            .map { WeatherSnapshot.Hour(id: hTimes[$0], temp: hTemps[$0], code: Int(hCodes[$0]), isDay: hDay[$0] == 1) }
+        let hours = hTimes.indices.compactMap { i -> WeatherSnapshot.Hour? in
+            guard let t = hTimes[i], t > now.addingTimeInterval(-3600), let temp = hTemps[safe: i] else { return nil }
+            return WeatherSnapshot.Hour(id: t, temp: temp, code: int(hCodes[safe: i]), isDay: (hDay[safe: i] ?? 1) == 1)
+        }.prefix(12)
 
-        let dTimes = strs(daily, "time").compactMap(df.date)
+        let dTimes = strs(daily, "time").map { df.date(from: $0) }
         let dMax = nums(daily, "temperature_2m_max"), dMin = nums(daily, "temperature_2m_min")
         let dCode = nums(daily, "weather_code"), dRain = nums(daily, "precipitation_probability_max")
-        let days = dTimes.indices.filter { $0 < dMax.count }.map {
-            WeatherSnapshot.Day(id: dTimes[$0], max: dMax[$0], min: dMin[$0], code: Int(dCode[$0]), rain: Int(dRain[safe: $0] ?? 0))
+        let days = dTimes.indices.compactMap { i -> WeatherSnapshot.Day? in
+            guard let t = dTimes[i], let hi = dMax[safe: i], let lo = dMin[safe: i] else { return nil }
+            return WeatherSnapshot.Day(id: t, max: hi, min: lo, code: int(dCode[safe: i]), rain: int(dRain[safe: i]))
         }
         let sunrise = strs(daily, "sunrise").first.flatMap(f.date)
         let sunset = strs(daily, "sunset").first.flatMap(f.date)
@@ -263,9 +271,9 @@ final class WeatherService: NSObject, CLLocationManagerDelegate {
         func num(_ k: String) -> Double { (current[k] as? NSNumber)?.doubleValue ?? 0 }
         snapshot = WeatherSnapshot(
             place: place, temp: num("temperature_2m"), feels: num("apparent_temperature"),
-            code: Int(num("weather_code")), isDay: num("is_day") == 1,
-            humidity: Int(num("relative_humidity_2m")), wind: num("wind_speed_10m"),
-            sunrise: sunrise, sunset: sunset, hours: Array(hours), days: days
+            code: int(num("weather_code")), isDay: num("is_day") == 1,
+            humidity: int(num("relative_humidity_2m")), wind: num("wind_speed_10m"),
+            sunrise: sunrise, sunset: sunset, hours: Array(hours), days: days, timeZone: tz
         )
         status = ""
     }
@@ -274,14 +282,14 @@ final class WeatherService: NSObject, CLLocationManagerDelegate {
         switch code {
         case 0: day ? "sun.max.fill" : "moon.stars.fill"
         case 1, 2: day ? "cloud.sun.fill" : "cloud.moon.fill"
-        case 3: loc("cloud.fill")
-        case 45, 48: loc("cloud.fog.fill")
-        case 51...57: loc("cloud.drizzle.fill")
-        case 61, 63, 66: loc("cloud.rain.fill")
-        case 65, 67: loc("cloud.heavyrain.fill")
-        case 71...77, 85, 86: loc("cloud.snow.fill")
+        case 3: "cloud.fill"
+        case 45, 48: "cloud.fog.fill"
+        case 51...57: "cloud.drizzle.fill"
+        case 61, 63, 66: "cloud.rain.fill"
+        case 65, 67: "cloud.heavyrain.fill"
+        case 71...77, 85, 86: "cloud.snow.fill"
         case 80...82: day ? "cloud.sun.rain.fill" : "cloud.moon.rain.fill"
-        case 95...99: loc("cloud.bolt.rain.fill")
+        case 95...99: "cloud.bolt.rain.fill"
         default: "cloud.fill"
         }
     }
@@ -327,12 +335,16 @@ final class CalendarService {
         let id: String
         let title: String
         let due: Date?
+        // 日付だけで時刻のないリマインダー
+        let dueAllDay: Bool
         let color: NSColor
     }
 
     private(set) var events: [Event] = []
     private(set) var monthEvents: [Event] = []
     private(set) var reminders: [Reminder] = []
+    // reminders は先頭 40 件だけ持つので、件数はこちらを使う
+    private(set) var reminderCount = 0
     // カレンダーの詳細表示で選んでいる日と表示中の月（大きさを測るコピーとも共有する）
     var selectedDay = Calendar.current.startOfDay(for: Date())
     var shownMonth = Date()
@@ -384,11 +396,19 @@ final class CalendarService {
         if wantsReminders, reminderAccess {
             let predicate = store.predicateForIncompleteReminders(withDueDateStarting: nil, ending: nil, calendars: nil)
             store.fetchReminders(matching: predicate) { [weak self] items in
-                let list = (items ?? []).prefix(40).map {
-                    Reminder(id: $0.calendarItemIdentifier, title: $0.title ?? "", due: $0.dueDateComponents?.date,
-                             color: $0.calendar.color ?? .systemOrange)
+                let all = items ?? []
+                // dueDateComponents は calendar が入っていないことが多く、.date だと nil になるため Calendar で日付にする
+                let list = all.map { r -> Reminder in
+                    let comps = r.dueDateComponents
+                    return Reminder(id: r.calendarItemIdentifier, title: r.title ?? "", due: comps.flatMap { Calendar.current.date(from: $0) },
+                                    dueAllDay: comps.map { $0.hour == nil } ?? false, color: r.calendar.color ?? .systemOrange)
                 }
-                Task { @MainActor in self?.reminders = list.sorted { ($0.due ?? .distantFuture) < ($1.due ?? .distantFuture) } }
+                // 期限の近いものが切り捨てられないよう、並べ替えてから上限を掛ける
+                let sorted = Array(list.sorted { ($0.due ?? .distantFuture) < ($1.due ?? .distantFuture) }.prefix(40))
+                Task { @MainActor in
+                    self?.reminders = sorted
+                    self?.reminderCount = all.count
+                }
             }
         }
     }
@@ -398,6 +418,7 @@ final class CalendarService {
         item.isCompleted = true
         try? store.save(item, commit: true)
         reminders.removeAll { $0.id == reminder.id }
+        reminderCount = max(0, reminderCount - 1)
     }
 
     func resetSelection() {
@@ -567,7 +588,9 @@ final class NowPlayingService {
     func seek(to seconds: Double) {
         guard let app = player, Self.allowedPlayers.contains(app), seconds.isFinite else { return }
         position = seconds
-        Task { _ = await AppleScript.run(AppleScript.ifRunning(app, "set player position to \(seconds)")) }
+        // 指数表記（1.0e-05 など）にならないよう、小数点以下を固定した形で渡す
+        let value = String(format: "%.2f", max(seconds, 0))
+        Task { _ = await AppleScript.run(AppleScript.ifRunning(app, "set player position to \(value)")) }
     }
 
     func send(_ command: Command, app target: String? = nil) {
@@ -607,7 +630,8 @@ final class NowPlayingService {
             Task {
                 guard let str = await AppleScript.run(AppleScript.ifRunning("Spotify", "return artwork url of current track")),
                       let url = URL(string: str), url.scheme == "https",
-                      let (data, _) = try? await URLSession.shared.data(from: url)
+                      let host = url.host, host == "scdn.co" || host.hasSuffix(".scdn.co") || host.hasSuffix(".spotifycdn.com"),
+                      let (data, _) = try? await URLSession.shared.data(from: url), data.count < 5_000_000
                 else { return }
                 if self.artworkKey == key { self.artwork = NSImage(data: data) }
             }
@@ -722,7 +746,7 @@ final class SystemStatsService {
             busy += user + sys + nice
             total += user + sys + nice + idle
         }
-        if let last = lastTicks, total > last.total {
+        if let last = lastTicks, total > last.total, busy >= last.busy {
             cpu = Double(busy - last.busy) / Double(total - last.total)
             cpuHistory = Array((cpuHistory + [cpu]).suffix(30))
         }
@@ -764,7 +788,8 @@ final class SystemStatsService {
             let ifa = p.pointee
             guard let addr = ifa.ifa_addr, addr.pointee.sa_family == UInt8(AF_LINK), let data = ifa.ifa_data else { continue }
             let name = String(cString: ifa.ifa_name)
-            guard name.hasPrefix("en") || name.hasPrefix("utun") || name.hasPrefix("pdp") else { continue }
+            // VPN（utun）の通信は物理インターフェースでも数えられるため、二重に数えないよう含めない（システム概要の合計と同じ）
+            guard name.hasPrefix("en") || name.hasPrefix("pdp") else { continue }
             let d = data.assumingMemoryBound(to: if_data.self).pointee
             rx += UInt64(d.ifi_ibytes)
             tx += UInt64(d.ifi_obytes)
@@ -792,12 +817,35 @@ final class SystemStatsService {
         }
     }
 
+}
+
+// 数値と単位の書式（桁が増えたら上の単位に切り替える。丸めで「1000 KB/s」のようにならないよう境界は丸め後で判定する）
+enum Fmt {
     static func rate(_ bytes: Double) -> String {
-        switch bytes {
-        case ..<1_000: String(format: "%.0f B/s", bytes)
-        case ..<1_000_000: String(format: "%.0f KB/s", bytes / 1_000)
-        default: String(format: "%.1f MB/s", bytes / 1_000_000)
+        let v = bytes.isFinite ? max(bytes, 0) : 0
+        return switch v {
+        case ..<999.5: String(format: "%.0f B/s", v)
+        case ..<999_500: String(format: "%.0f KB/s", v / 1e3)
+        case ..<999_950_000: String(format: "%.1f MB/s", v / 1e6)
+        default: String(format: "%.1f GB/s", v / 1e9)
         }
+    }
+
+    // ストレージ容量（10 進の GB を受け取る）
+    static func storage(_ gb: Double) -> String {
+        let v = gb.isFinite ? max(gb, 0) : 0
+        return v >= 999.5 ? String(format: "%.1f TB", v / 1000) : String(format: "%.0f GB", v)
+    }
+
+    // メモリ量（バイト、2 進）
+    static func memory(_ bytes: Double) -> String {
+        let mb = (bytes.isFinite ? max(bytes, 0) : 0) / 1_048_576
+        return mb >= 1023.5 ? String(format: "%.1f GB", mb / 1024) : String(format: "%.0f MB", mb)
+    }
+
+    // 0〜1 の割合を整数の % に（NaN や範囲外でも落ちない）
+    static func percent(_ fraction: Double) -> Int {
+        fraction.isFinite ? Int(min(max(fraction, 0), 1) * 100) : 0
     }
 }
 
@@ -843,6 +891,7 @@ final class BatteryService {
             hasBattery = false
             return
         }
+        hasBattery = true
         let cur = desc[kIOPSCurrentCapacityKey] as? Double ?? 100
         let max = desc[kIOPSMaxCapacityKey] as? Double ?? 100
         level = cur / Swift.max(max, 1)
@@ -896,12 +945,15 @@ final class VolumeService {
 
     @ObservationIgnored private var listening: AudioObjectID = 0
     @ObservationIgnored private var block: AudioObjectPropertyListenerBlock?
+    @ObservationIgnored private var deviceBlock: AudioObjectPropertyListenerBlock?
+
+    private static var defaultDeviceAddress = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+                                                                          mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
 
     private var device: AudioObjectID {
         var id = AudioObjectID(0)
         var size = UInt32(MemoryLayout<AudioObjectID>.size)
-        var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-                                              mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var addr = Self.defaultDeviceAddress
         AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &id)
         return id
     }
@@ -912,7 +964,24 @@ final class VolumeService {
 
     func setActive(_ on: Bool) {
         stopListening()
+        if let deviceBlock {
+            AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &Self.defaultDeviceAddress, .main, deviceBlock)
+            self.deviceBlock = nil
+        }
         guard on else { return }
+        listen()
+        // AirPods などに出力先が切り替わったら、新しい機器の音量を見張り直す
+        let b: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            DispatchQueue.main.async {
+                self?.stopListening()
+                self?.listen()
+            }
+        }
+        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &Self.defaultDeviceAddress, .main, b)
+        deviceBlock = b
+    }
+
+    private func listen() {
         refresh()
         let dev = device
         let b: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
@@ -991,6 +1060,8 @@ final class PomodoroService {
     func toggle() { running ? pause() : start() }
 
     func start() {
+        // 前のタイマーを残すと、一時停止しても裏で動き続ける
+        timer?.invalidate()
         endDate = Date().addingTimeInterval(remaining)
         running = true
         let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.tick() } }
@@ -1025,8 +1096,8 @@ final class PomodoroService {
         remaining = max(0, endDate.timeIntervalSinceNow)
         if remaining <= 0 {
             NSSound(named: "Glass")?.play()
+            // skip は動作中なら次のフェーズを自動で開始する
             skip()
-            start()
         }
     }
 
@@ -1047,7 +1118,11 @@ final class ClipboardService {
     func setActive(_ on: Bool) {
         timer?.invalidate()
         timer = nil
-        guard on else { return }
+        // ウィジェットを外したら、メモリ上の履歴も消す
+        guard on else {
+            items = []
+            return
+        }
         let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.poll() } }
         t.tolerance = 0.5
         RunLoop.main.add(t, forMode: .common)
@@ -1060,6 +1135,10 @@ final class ClipboardService {
         .init("org.nspasteboard.TransientType"),
         .init("org.nspasteboard.AutoGeneratedType"),
         .init("com.agilebits.onepassword"),
+        .init("de.petermaurer.TransientPasteboardType"),
+        .init("com.typeit4me.clipping"),
+        .init("Pasteboard generator type"),
+        .init("net.antelle.keeweb"),
     ]
 
     private func poll() {

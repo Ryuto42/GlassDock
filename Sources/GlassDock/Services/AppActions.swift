@@ -31,9 +31,10 @@ enum AppActions {
     static func newWindow(_ app: NSRunningApplication) {
         let keywords = ["新規ウインドウ", "新規ウィンドウ", "新しいウィンドウ", "新しいウインドウ", "New Window",
                         "新規ブラウザウインドウ", "新規 Finder ウインドウ", "新規Finderウインドウ", "New Finder Window"]
-        let command = menuCommands(pid: app.processIdentifier).first { c in
-            keywords.contains { c.title.hasPrefix($0) }
-        }
+        // 大きなアプリはメニュー項目が数百あるため、見つかった時点で探すのをやめる
+        let command = menuCommands(pid: app.processIdentifier) { title in
+            keywords.contains { title.hasPrefix($0) }
+        }.last
         app.unhide()
         app.activate()
         // 前面に出る前のアプリのメニューは押せないことがあるため、少し待ってから押す
@@ -130,25 +131,28 @@ enum AppActions {
         let element: AXUIElement
     }
 
-    static func menuCommands(pid: pid_t) -> [MenuCommand] {
+    // stop を渡すと、それに当たる項目を見つけた時点で打ち切る（当たった項目は末尾に入る）
+    static func menuCommands(pid: pid_t, stop: ((String) -> Bool)? = nil) -> [MenuCommand] {
         let app = AXUIElementCreateApplication(pid)
         guard let bar: AXUIElement = app.attribute(kAXMenuBarAttribute) else { return [] }
         var result: [MenuCommand] = []
-        for top in bar.children.dropFirst() {
+        var found = false
+        for top in bar.children.dropFirst() where !found {
             let title: String = top.attribute(kAXTitleAttribute) ?? ""
-            for menu in top.children { collect(menu, path: [title], depth: 0, into: &result) }
+            for menu in top.children where !found { collect(menu, path: [title], depth: 0, stop: stop, found: &found, into: &result) }
         }
-        return result
+        return stop == nil || found ? result : []
     }
 
-    private static func collect(_ menu: AXUIElement, path: [String], depth: Int, into result: inout [MenuCommand]) {
+    private static func collect(_ menu: AXUIElement, path: [String], depth: Int, stop: ((String) -> Bool)?, found: inout Bool,
+                                into result: inout [MenuCommand]) {
         guard depth < 3, result.count < 600 else { return }
-        for item in menu.children {
+        for item in menu.children where !found {
             let title: String = item.attribute(kAXTitleAttribute) ?? ""
             guard !title.isEmpty else { continue }
             let subs = item.children
             if let sub = subs.first, sub.role == kAXMenuRole {
-                collect(sub, path: path + [title], depth: depth + 1, into: &result)
+                collect(sub, path: path + [title], depth: depth + 1, stop: stop, found: &found, into: &result)
             } else if (item.attribute(kAXEnabledAttribute) as Bool?) ?? true {
                 var shortcut = ""
                 if let key: String = item.attribute(kAXMenuItemCmdCharAttribute), !key.isEmpty {
@@ -156,13 +160,15 @@ enum AppActions {
                     shortcut = (mods & 4 != 0 ? "⌃" : "") + (mods & 2 != 0 ? "⌥" : "") + (mods & 1 != 0 ? "⇧" : "") + (mods & 8 == 0 ? "⌘" : "") + key
                 }
                 result.append(MenuCommand(title: title, path: path.joined(separator: " › "), shortcut: shortcut, element: item))
+                if stop?(title) == true { found = true }
             }
         }
     }
 
     // MARK: - App search
 
-    private static var installed: [URL]?
+    // 表示名はキー入力のたびに引くと重いため、一覧と一緒に覚えておく
+    private static var installed: [(url: URL, name: String)]?
 
     static func searchApps(_ query: String) -> [URL] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
@@ -172,15 +178,17 @@ enum AppActions {
             let dirs = ["/Applications", "/System/Applications", "/System/Applications/Utilities", "/Applications/Utilities",
                         fm.homeDirectoryForCurrentUser.appendingPathComponent("Applications").path]
             installed = dirs.flatMap { dir in
-                ((try? fm.contentsOfDirectory(atPath: dir)) ?? []).filter { $0.hasSuffix(".app") }.map { URL(fileURLWithPath: dir).appendingPathComponent($0) }
+                ((try? fm.contentsOfDirectory(atPath: dir)) ?? []).filter { $0.hasSuffix(".app") }.map { file in
+                    let url = URL(fileURLWithPath: dir).appendingPathComponent(file)
+                    return (url, fm.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: "").lowercased())
+                }
             }
         }
-        func name(_ u: URL) -> String { FileManager.default.displayName(atPath: u.path).replacingOccurrences(of: ".app", with: "").lowercased() }
         return (installed ?? [])
-            .filter { name($0).contains(q) }
-            .sorted { (name($0).hasPrefix(q) ? 0 : 1, name($0)) < (name($1).hasPrefix(q) ? 0 : 1, name($1)) }
+            .filter { $0.name.contains(q) }
+            .sorted { ($0.name.hasPrefix(q) ? 0 : 1, $0.name) < ($1.name.hasPrefix(q) ? 0 : 1, $1.name) }
             .prefix(6)
-            .map { $0 }
+            .map(\.url)
     }
 
     // MARK: - Power

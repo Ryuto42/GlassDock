@@ -11,6 +11,8 @@ final class GPUService {
     private(set) var history: [Double] = Array(repeating: 0, count: 30)
     private(set) var model = ""
     private(set) var cores: Int?
+    // 使用率を読めた（読めない Mac では 0% ではなく「—」を出す）
+    private(set) var available = false
 
     @ObservationIgnored private var timer: Timer?
 
@@ -31,21 +33,22 @@ final class GPUService {
         defer { IOObjectRelease(iterator) }
         var best: Double?
         var entry = IOIteratorNext(iterator)
+        // 2 秒ごとにメインスレッドで動くため、全プロパティを複製せず必要なキーだけ読む
+        func property(_ entry: io_registry_entry_t, _ key: String) -> Any? {
+            IORegistryEntryCreateCFProperty(entry, key as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue()
+        }
         while entry != 0 {
-            var props: Unmanaged<CFMutableDictionary>?
-            if IORegistryEntryCreateCFProperties(entry, &props, kCFAllocatorDefault, 0) == KERN_SUCCESS,
-               let dict = props?.takeRetainedValue() as? [String: Any] {
-                if let stats = dict["PerformanceStatistics"] as? [String: Any],
-                   let value = (stats["Device Utilization %"] as? NSNumber)?.doubleValue {
-                    best = max(best ?? 0, value / 100)
-                }
-                if model.isEmpty, let m = dict["model"] as? String { model = m }
-                if cores == nil { cores = (dict["gpu-core-count"] as? NSNumber)?.intValue }
+            if let stats = property(entry, "PerformanceStatistics") as? [String: Any],
+               let value = (stats["Device Utilization %"] as? NSNumber)?.doubleValue {
+                best = max(best ?? 0, value / 100)
             }
+            if model.isEmpty, let m = property(entry, "model") as? String { model = m }
+            if cores == nil { cores = (property(entry, "gpu-core-count") as? NSNumber)?.intValue }
             IOObjectRelease(entry)
             entry = IOIteratorNext(iterator)
         }
-        guard let best else { return }
+        guard let best, best.isFinite else { return }
+        available = true
         usage = min(max(best, 0), 1)
         history = Array((history + [usage]).suffix(30))
     }
@@ -53,7 +56,7 @@ final class GPUService {
 
 // MARK: - Processes
 
-struct ProcessSample: Identifiable, Equatable {
+nonisolated struct ProcessSample: Identifiable, Equatable, Sendable {
     let id: pid_t
     let name: String
     let cpu: Double          // 1.0 = 1 コア分
@@ -72,16 +75,30 @@ final class ProcessMonitor {
     @ObservationIgnored private var lastTimes: [pid_t: UInt64] = [:]
     @ObservationIgnored private var lastSample: UInt64 = 0
     @ObservationIgnored private var hotSince: [pid_t: Date] = [:]
+    @ObservationIgnored private var busy = false
+    @ObservationIgnored private var generation = 0
     @ObservationIgnored private let timebase: (numer: UInt64, denom: UInt64) = {
         var info = mach_timebase_info_data_t()
         mach_timebase_info(&info)
         return (UInt64(info.numer), UInt64(max(info.denom, 1)))
     }()
 
+    nonisolated private struct Measurement: Sendable {
+        let samples: [ProcessSample]
+        let times: [pid_t: UInt64]
+        let at: UInt64
+        let elapsed: Double
+    }
+
     func setActive(_ on: Bool) {
         timer?.invalidate()
         timer = nil
+        // 止めていた間の値で差分や「使い続けている」判定をしないよう、前回値を捨てる
         lastTimes = [:]
+        lastSample = 0
+        hotSince = [:]
+        generation += 1
+        busy = false
         guard on else { return }
         sample()
         let t = Timer(timeInterval: 3, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.sample() } }
@@ -90,16 +107,30 @@ final class ProcessMonitor {
         timer = t
     }
 
+    // 全プロセスを読むのは重いので、メインスレッドの外で行う
     private func sample() {
+        guard !busy else { return }
+        busy = true
+        let gen = generation, prev = lastTimes, prevAt = lastSample, tb = timebase
+        let apps = Dictionary(NSWorkspace.shared.runningApplications.map { ($0.processIdentifier, (name: $0.localizedName, isApp: $0.activationPolicy == .regular)) },
+                              uniquingKeysWith: { a, _ in a })
+        Task.detached(priority: .utility) {
+            let m = Self.measure(prev: prev, prevAt: prevAt, timebase: tb, apps: apps)
+            await MainActor.run { self.apply(m, generation: gen) }
+        }
+    }
+
+    nonisolated private static func measure(prev: [pid_t: UInt64], prevAt: UInt64, timebase: (numer: UInt64, denom: UInt64),
+                                            apps: [pid_t: (name: String?, isApp: Bool)]) -> Measurement {
         let count = proc_listallpids(nil, 0)
-        guard count > 0 else { return }
+        guard count > 0 else { return Measurement(samples: [], times: prev, at: prevAt, elapsed: 0) }
         var pids = [pid_t](repeating: 0, count: Int(count) + 64)
-        let got = Int(proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size)))
+        // 失敗すると -1 が返り、そのまま prefix に渡すと落ちる
+        let got = max(0, Int(proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))))
         let now = mach_absolute_time()
-        let elapsed = lastSample > 0 ? Double((now - lastSample) * timebase.numer / timebase.denom) : 0
+        let elapsed = prevAt > 0 && now > prevAt ? Double((now - prevAt) * timebase.numer / timebase.denom) : 0
         var times: [pid_t: UInt64] = [:]
         var samples: [ProcessSample] = []
-        let apps = Dictionary(NSWorkspace.shared.runningApplications.map { ($0.processIdentifier, $0) }, uniquingKeysWith: { a, _ in a })
 
         for pid in pids.prefix(got) where pid > 0 {
             var info = proc_taskinfo()
@@ -109,15 +140,23 @@ final class ProcessMonitor {
             let total = (info.pti_total_user + info.pti_total_system) * timebase.numer / timebase.denom
             times[pid] = total
             var cpu = 0.0
-            if elapsed > 0, let prev = lastTimes[pid], total >= prev { cpu = Double(total - prev) / elapsed }
+            if elapsed > 0, let p = prev[pid], total >= p { cpu = Double(total - p) / elapsed }
             let app = apps[pid]
-            samples.append(ProcessSample(id: pid, name: app?.localizedName ?? Self.name(of: pid),
+            samples.append(ProcessSample(id: pid, name: app?.name ?? name(of: pid),
                                          cpu: cpu, memoryMB: Double(info.pti_resident_size) / 1_048_576,
-                                         isApp: app?.activationPolicy == .regular))
+                                         isApp: app?.isApp ?? false))
         }
-        lastTimes = times
-        lastSample = now
-        guard elapsed > 0 else { return }
+        return Measurement(samples: samples, times: times, at: now, elapsed: elapsed)
+    }
+
+    private func apply(_ m: Measurement, generation gen: Int) {
+        guard gen == generation else { return }
+        busy = false
+        lastTimes = m.times
+        lastSample = m.at
+        guard m.elapsed > 0 else { return }
+        let samples = m.samples
+        let times = m.times
 
         topCPU = Array(samples.sorted { $0.cpu > $1.cpu }.prefix(6))
         topMemory = Array(samples.sorted { $0.memoryMB > $1.memoryMB }.prefix(6))
@@ -129,7 +168,7 @@ final class ProcessMonitor {
         hogs = samples.filter { s in hotSince[s.id].map { date.timeIntervalSince($0) > 120 } ?? false }
     }
 
-    private static func name(of pid: pid_t) -> String {
+    nonisolated private static func name(of pid: pid_t) -> String {
         var buffer = [CChar](repeating: 0, count: 256)
         proc_name(pid, &buffer, UInt32(buffer.count))
         let name = String(cString: buffer)
@@ -320,7 +359,7 @@ final class HealthService {
 
         let total = hub.system.diskTotal
         list.append(.init(id: "disk", title: loc("ストレージ"),
-                          detail: total > 0 ? loc("%.0f GB 空き", hub.system.diskFree) : loc("確認中…"),
+                          detail: total > 0 ? loc("%@ 空き", Fmt.storage(hub.system.diskFree)) : loc("確認中…"),
                           level: diskLevel, symbol: "internaldrive"))
 
         let hogs = hub.processes.hogs

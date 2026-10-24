@@ -3,3 +3,4 @@
 "NSRemindersFullAccessUsageDescription" = "リマインダーウィジェットに未完了の項目を表示します。";
 "NSLocationUsageDescription" = "天気ウィジェットで現在地の天気を表示します。";
 "NSLocationWhenInUseUsageDescription" = "天気ウィジェットで現在地の天気を表示します。";
+"NSDownloadsFolderUsageDescription" = "Dock のダウンロードフォルダに最近のファイルを表示し、新しいダウンロードを知らせます。";

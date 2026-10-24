@@ -2,8 +2,11 @@ import AppKit
 import ApplicationServices
 @preconcurrency import ScreenCaptureKit
 
-@_silgen_name("_AXUIElementGetWindow")
-private func _AXUIElementGetWindow(_ element: AXUIElement, _ id: UnsafeMutablePointer<CGWindowID>) -> AXError
+// 非公開 API。見つからない環境でも起動できるよう、リンク時ではなく実行時に探す
+nonisolated let axGetWindow: (@convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError)? = {
+    guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "_AXUIElementGetWindow") else { return nil }
+    return unsafeBitCast(symbol, to: (@convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError).self)
+}()
 
 struct WindowInfo: Identifiable, Equatable {
     let id: CGWindowID
@@ -19,6 +22,14 @@ struct WindowInfo: Identifiable, Equatable {
     }
 }
 
+// 別のスレッドで AX から読んだウィンドウの情報
+nonisolated struct AXWindowSnapshot: @unchecked Sendable {
+    let element: AXUIElement
+    let title: String?
+    let subrole: String?
+    let minimized: Bool
+}
+
 @MainActor
 final class WindowService {
     static let shared = WindowService()
@@ -28,29 +39,47 @@ final class WindowService {
 
     func axWindows(pid: pid_t) -> [CGWindowID: AXUIElement] {
         let app = AXUIElementCreateApplication(pid)
+        guard let axGetWindow else { return [:] }
         let windows: [AXUIElement] = app.attribute(kAXWindowsAttribute) ?? []
         var result: [CGWindowID: AXUIElement] = [:]
         for w in windows {
             var id: CGWindowID = 0
-            if _AXUIElementGetWindow(w, &id) == .success, id != 0 { result[id] = w }
+            if axGetWindow(w, &id) == .success, id != 0 { result[id] = w }
+        }
+        return result
+    }
+
+    // Chromium 系など AX の応答が遅いアプリでもホバーが止まらないよう、メインスレッドの外で読む
+    nonisolated static func axSnapshot(pid: pid_t) -> [CGWindowID: AXWindowSnapshot] {
+        guard let axGetWindow else { return [:] }
+        let app = AXUIElementCreateApplication(pid)
+        let windows: [AXUIElement] = app.attribute(kAXWindowsAttribute) ?? []
+        var result: [CGWindowID: AXWindowSnapshot] = [:]
+        for w in windows {
+            var id: CGWindowID = 0
+            guard axGetWindow(w, &id) == .success, id != 0 else { continue }
+            result[id] = AXWindowSnapshot(element: w, title: w.attribute(kAXTitleAttribute), subrole: w.attribute(kAXSubroleAttribute),
+                                          minimized: w.attribute(kAXMinimizedAttribute) ?? false)
         }
         return result
     }
 
     // ScreenCaptureKit の一覧を基準にし、AX で最小化状態とタイトルを補う
     func windows(pid: pid_t) async -> [WindowInfo] {
-        let ax = axWindows(pid: pid)
+        let axTask = Task.detached(priority: .userInitiated) { Self.axSnapshot(pid: pid) }
         var list: [WindowInfo] = []
+        let content = Permissions.screenRecording
+            ? try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: false) : nil
+        let ax = await axTask.value
 
-        if Permissions.screenRecording,
-           let content = try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: false) {
+        if let content {
+            let appHidden = NSRunningApplication(processIdentifier: pid)?.isHidden ?? false
             for w in content.windows where w.owningApplication?.processID == pid {
                 guard w.windowLayer == 0, w.frame.width > 60, w.frame.height > 40 else { continue }
                 let axw = ax[w.windowID]
-                let minimized = axw.flatMap { ($0.attribute(kAXMinimizedAttribute) as Bool?) } ?? false
-                let title = w.title.flatMap { $0.isEmpty ? nil : $0 } ?? axw?.attribute(kAXTitleAttribute) ?? ""
+                let minimized = axw?.minimized ?? false
+                let title = w.title.flatMap { $0.isEmpty ? nil : $0 } ?? axw?.title ?? ""
                 // 画面外の隠しウィンドウ（Zoom の補助ウィンドウなど）は、最小化中か非表示アプリのものだけ残す
-                let appHidden = NSRunningApplication(processIdentifier: pid)?.isHidden ?? false
                 guard w.isOnScreen || (axw != nil && (minimized || appHidden)) else { continue }
                 scWindows[w.windowID] = w
                 list.append(WindowInfo(
@@ -69,11 +98,10 @@ final class WindowService {
             }
         } else {
             for (id, w) in ax {
-                let subrole: String? = w.attribute(kAXSubroleAttribute)
-                guard subrole == nil || subrole == kAXStandardWindowSubrole else { continue }
+                guard w.subrole == nil || w.subrole == kAXStandardWindowSubrole else { continue }
                 list.append(WindowInfo(
-                    id: id, pid: pid, title: w.attribute(kAXTitleAttribute) ?? "",
-                    frame: .zero, isMinimized: w.attribute(kAXMinimizedAttribute) ?? false,
+                    id: id, pid: pid, title: w.title ?? "",
+                    frame: .zero, isMinimized: w.minimized,
                     isOnScreen: true, thumbnail: nil
                 ))
             }

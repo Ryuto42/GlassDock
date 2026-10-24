@@ -67,12 +67,16 @@ private struct ClockDetail: View {
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
             VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(ctx.date, format: .dateTime.hour(settings.clock24h ? .twoDigits(amPM: .omitted) : .defaultDigits(amPM: .abbreviated)).minute().second())
+                    Text(ctx.date, format: ClockFormat.time(seconds: true, h24: settings.clock24h))
                         .font(.system(size: 38, weight: .semibold, design: .rounded))
                         .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
                     Text(ctx.date, format: .dateTime.year().month().day().weekday(.wide))
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     let p = DayProgress.value(ctx.date)
@@ -84,12 +88,13 @@ private struct ClockDetail: View {
                         SectionTitle(text: "世界時計")
                         ForEach(settings.worldClocks.compactMap(TimeZone.init(identifier:)), id: \.identifier) { tz in
                             HStack {
-                                Text(WorldClock.city(tz)).font(.system(size: 13, weight: .medium))
-                                Text(WorldClock.offset(ctx.date, tz)).font(.system(size: 11)).foregroundStyle(.secondary)
-                                Spacer()
+                                Text(WorldClock.city(tz)).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                                Text(WorldClock.offset(ctx.date, tz)).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                                Spacer(minLength: 4)
                                 Text(WorldClock.time(ctx.date, tz, h24: settings.clock24h))
                                     .font(.system(size: 17, weight: .semibold, design: .rounded))
                                     .monospacedDigit()
+                                    .fixedSize()
                             }
                         }
                     }
@@ -110,7 +115,8 @@ private struct CalendarDetail: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text(service.shownMonth, format: .dateTime.year().month(.wide)).font(.system(size: 15, weight: .semibold))
-                Spacer()
+                    .lineLimit(1).minimumScaleFactor(0.8)
+                Spacer(minLength: 4)
                 PillButton(symbol: "chevron.left", size: 24) { shift(-1) }
                 PillButton(symbol: "circle.fill", size: 24) { goToday() }
                 PillButton(symbol: "chevron.right", size: 24) { shift(1) }
@@ -217,7 +223,7 @@ private struct EventRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(event.title).font(.system(size: 12, weight: .semibold)).lineLimit(1)
                 Text(event.allDay ? loc("終日") : "\(event.start.formatted(date: .omitted, time: .shortened)) – \(event.end.formatted(date: .omitted, time: .shortened))")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 0)
         }
@@ -264,7 +270,7 @@ private struct RemindersDetail: View {
             HStack {
                 Text("リマインダー").font(.system(size: 15, weight: .semibold))
                 Spacer()
-                Text("\(service.reminders.count)").font(.system(size: 15, weight: .semibold, design: .rounded)).foregroundStyle(.orange)
+                Text("\(service.reminderCount)").font(.system(size: 15, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(.orange)
             }
             if !service.reminderAccess {
                 Text("リマインダーへのアクセスが許可されていません").font(.system(size: 12)).foregroundStyle(.secondary)
@@ -280,14 +286,19 @@ private struct RemindersDetail: View {
                     VStack(alignment: .leading, spacing: 0) {
                         Text(r.title).font(.system(size: 12, weight: .medium)).lineLimit(1)
                         if let due = r.due {
-                            Text(due.formatted(.dateTime.month().day().hour().minute()))
+                            // 日付だけのものは時刻を出さず、その日のうちは期限切れにしない
+                            let overdue = r.dueAllDay ? due < Calendar.current.startOfDay(for: Date()) : due < Date()
+                            Text(r.dueAllDay ? due.formatted(.dateTime.month().day()) : due.formatted(.dateTime.month().day().hour().minute()))
                                 .font(.system(size: 10))
-                                .foregroundStyle(due < Date() ? .red : .secondary)
+                                .foregroundStyle(overdue ? .red : .secondary)
                         }
                     }
                     Spacer(minLength: 0)
                 }
                 .transition(.move(edge: .leading).combined(with: .opacity))
+            }
+            if service.reminderCount > 8 {
+                Text(loc("ほか %d 件", service.reminderCount - 8)).font(.system(size: 11)).foregroundStyle(.secondary)
             }
         }
         .frame(width: 250)
@@ -301,16 +312,17 @@ private struct WeatherDetail: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let s = service.snapshot {
+                let tz = s.timeZone
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 0) {
-                        Text(s.place.isEmpty ? loc("現在地") : s.place).font(.system(size: 14, weight: .semibold))
-                        Text("\(Int(s.temp.rounded()))°").font(.system(size: 46, weight: .light, design: .rounded))
-                        Text(WeatherService.describe(s.code)).font(.system(size: 12, weight: .medium))
+                        Text(s.place.isEmpty ? loc("現在地") : s.place).font(.system(size: 14, weight: .semibold)).lineLimit(1)
+                        Text("\(Int(s.temp.rounded()))°").font(.system(size: 46, weight: .light, design: .rounded)).lineLimit(1)
+                        Text(WeatherService.describe(s.code)).font(.system(size: 12, weight: .medium)).lineLimit(1)
                         if let d = s.days.first {
                             Text(loc("最高 %d°  最低 %d°", Int(d.max.rounded()), Int(d.min.rounded()))).font(.system(size: 11)).foregroundStyle(.secondary)
                         }
                     }
-                    Spacer()
+                    Spacer(minLength: 8)
                     Image(systemName: WeatherService.symbol(s.code, day: s.isDay))
                         .symbolRenderingMode(.multicolor)
                         .font(.system(size: 44))
@@ -327,35 +339,41 @@ private struct WeatherDetail: View {
                     HStack(spacing: 14) {
                         ForEach(s.hours) { h in
                             VStack(spacing: 5) {
-                                Text(h.id, format: .dateTime.hour()).font(.system(size: 10)).foregroundStyle(.secondary)
+                                Text(h.id, format: Self.style(.dateTime.hour(), tz)).font(.system(size: 10)).foregroundStyle(.secondary).fixedSize()
                                 Image(systemName: WeatherService.symbol(h.code, day: h.isDay))
                                     .symbolRenderingMode(.multicolor).font(.system(size: 15)).frame(height: 18)
-                                Text("\(Int(h.temp.rounded()))°").font(.system(size: 12, weight: .medium))
+                                Text("\(Int(h.temp.rounded()))°").font(.system(size: 12, weight: .medium)).fixedSize()
                             }
                         }
                     }
                 }
                 Divider()
                 let lo = s.days.map(\.min).min() ?? 0, hi = s.days.map(\.max).max() ?? 1
+                let cal = { var c = Calendar.current; c.timeZone = tz; return c }()
                 VStack(spacing: 6) {
                     ForEach(s.days) { d in
+                        // 英語の「Today」や「-12°」「104°」でも折り返さないよう 1 行に収める
                         HStack(spacing: 8) {
-                            Text(Calendar.current.isDateInToday(d.id) ? loc("今日") : d.id.formatted(.dateTime.weekday(.short)))
-                                .font(.system(size: 12, weight: .medium)).frame(width: 30, alignment: .leading)
+                            Text(cal.isDateInToday(d.id) ? loc("今日") : d.id.formatted(Self.style(.dateTime.weekday(.short), tz)))
+                                .font(.system(size: 12, weight: .medium)).lineLimit(1).minimumScaleFactor(0.7)
+                                .frame(width: 36, alignment: .leading)
                             Image(systemName: WeatherService.symbol(d.code)).symbolRenderingMode(.multicolor)
                                 .font(.system(size: 13)).frame(width: 22)
-                            Text(d.rain > 0 ? "\(d.rain)%" : "").font(.system(size: 10)).foregroundStyle(.cyan).frame(width: 28)
-                            Text("\(Int(d.min.rounded()))°").font(.system(size: 11)).foregroundStyle(.secondary).frame(width: 26)
+                            Text(d.rain > 0 ? "\(d.rain)%" : "").font(.system(size: 10)).foregroundStyle(.cyan)
+                                .lineLimit(1).minimumScaleFactor(0.7).frame(width: 28)
+                            Text("\(Int(d.min.rounded()))°").font(.system(size: 11)).foregroundStyle(.secondary)
+                                .monospacedDigit().lineLimit(1).minimumScaleFactor(0.7).frame(width: 28)
                             TemperatureBar(lo: lo, hi: hi, min: d.min, max: d.max)
-                            Text("\(Int(d.max.rounded()))°").font(.system(size: 11, weight: .medium)).frame(width: 26)
+                            Text("\(Int(d.max.rounded()))°").font(.system(size: 11, weight: .medium))
+                                .monospacedDigit().lineLimit(1).minimumScaleFactor(0.7).frame(width: 28)
                         }
                     }
                 }
                 if let rise = s.sunrise, let set = s.sunset {
                     HStack {
-                        Label(rise.formatted(date: .omitted, time: .shortened), systemImage: "sunrise.fill")
+                        Label(rise.formatted(Self.style(.dateTime.hour().minute(), tz)), systemImage: "sunrise.fill")
                         Spacer()
-                        Label(set.formatted(date: .omitted, time: .shortened), systemImage: "sunset.fill")
+                        Label(set.formatted(Self.style(.dateTime.hour().minute(), tz)), systemImage: "sunset.fill")
                     }
                     .symbolRenderingMode(.multicolor)
                     .font(.system(size: 11))
@@ -367,6 +385,13 @@ private struct WeatherDetail: View {
             }
         }
         .frame(width: 290)
+    }
+
+    // 都市を指定したときは、時刻や曜日をその土地の時間で出す
+    private static func style(_ f: Date.FormatStyle, _ tz: TimeZone) -> Date.FormatStyle {
+        var f = f
+        f.timeZone = tz
+        return f
     }
 }
 
@@ -455,19 +480,22 @@ private struct SystemDetail: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            metric("CPU", "\(Int(service.cpu * 100))%", service.cpu, .green, history: service.cpuHistory)
+            metric("CPU", "\(Fmt.percent(service.cpu))%", service.cpu, .green, history: service.cpuHistory)
             metric("メモリ", String(format: "%.1f / %.0f GB", service.memoryUsedGB, service.memoryTotalGB), service.memory, .cyan, history: nil)
-            let used = service.diskTotal > 0 ? 1 - service.diskFree / service.diskTotal : 0
-            metric("ストレージ", loc("%.0f GB 空き / %.0f GB", service.diskFree, service.diskTotal), used, .indigo, history: nil)
+            let total = service.diskTotal
+            let used = total > 0 ? 1 - service.diskFree / total : 0
+            metric("ストレージ", total > 0 ? loc("%@ 空き / %@", Fmt.storage(service.diskFree), Fmt.storage(total)) : loc("確認中…"),
+                   used, .indigo, history: nil)
             VStack(alignment: .leading, spacing: 4) {
                 SectionTitle(text: "ネットワーク")
                 HStack {
-                    Label(SystemStatsService.rate(service.down), systemImage: "arrow.down").foregroundStyle(.cyan)
-                    Spacer()
-                    Label(SystemStatsService.rate(service.up), systemImage: "arrow.up").foregroundStyle(.pink)
+                    Label(Fmt.rate(service.down), systemImage: "arrow.down").foregroundStyle(.cyan)
+                    Spacer(minLength: 4)
+                    Label(Fmt.rate(service.up), systemImage: "arrow.up").foregroundStyle(.pink)
                 }
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .monospacedDigit()
+                .lineLimit(1)
                 Sparkline(values: service.netHistory).fill(.cyan.opacity(0.25)).frame(height: 28)
             }
         }
@@ -479,8 +507,8 @@ private struct SystemDetail: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 SectionTitle(text: title)
-                Spacer()
-                Text(value).font(.system(size: 12, weight: .semibold, design: .rounded)).monospacedDigit()
+                Spacer(minLength: 4)
+                Text(value).font(.system(size: 12, weight: .semibold, design: .rounded)).monospacedDigit().lineLimit(1)
             }
             if let history {
                 Sparkline(values: history, maxValue: 1).fill(color.opacity(0.3)).frame(height: 28)
@@ -495,22 +523,28 @@ private struct BatteryDetail: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-        HStack(spacing: 14) {
-            ZStack {
-                ProgressRing(progress: service.level, color: service.level < 0.2 && !service.charging ? .red : .green, width: 7)
-                Image(systemName: service.symbol).font(.system(size: 18))
-            }
-            .frame(width: 62, height: 62)
-            VStack(alignment: .leading, spacing: 3) {
-                Text("\(Int(service.level * 100))%").font(.system(size: 24, weight: .semibold, design: .rounded))
-                Text(service.charging ? loc("充電中") : service.pluggedIn ? loc("電源に接続中") : loc("バッテリー駆動"))
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
-                if let m = service.minutesLeft, !service.pluggedIn {
-                    Text(loc("残り約 %d 時間 %d 分", m / 60, m % 60)).font(.system(size: 11)).foregroundStyle(.secondary)
+            if service.hasBattery {
+                HStack(spacing: 14) {
+                    ZStack {
+                        ProgressRing(progress: service.level, color: service.level < 0.2 && !service.charging ? .red : .green, width: 7)
+                        Image(systemName: service.symbol).font(.system(size: 18))
+                    }
+                    .frame(width: 62, height: 62)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("\(Fmt.percent(service.level))%").font(.system(size: 24, weight: .semibold, design: .rounded)).monospacedDigit()
+                        Text(service.charging ? loc("充電中") : service.pluggedIn ? loc("電源に接続中") : loc("バッテリー駆動"))
+                            .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+                        if let m = service.minutesLeft, !service.pluggedIn {
+                            Text(loc("残り約 %d 時間 %d 分", m / 60, m % 60)).font(.system(size: 11)).foregroundStyle(.secondary)
+                                .lineLimit(1).minimumScaleFactor(0.8)
+                        }
+                    }
                 }
+                BatteryHealthRows(service: service)
+            } else {
+                Label("この Mac にはバッテリーがありません", systemImage: "powerplug.fill")
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
             }
-        }
-        BatteryHealthRows(service: service)
         }
         .frame(width: 220, alignment: .leading)
     }
@@ -527,6 +561,7 @@ private struct PomodoroDetail: View {
             ZStack {
                 ProgressRing(progress: service.progress, color: color, width: 10)
                 Text(service.label).font(.system(size: 34, weight: .semibold, design: .rounded)).monospacedDigit()
+                    .lineLimit(1).minimumScaleFactor(0.6).padding(.horizontal, 14)
                     .contentTransition(.numericText(countsDown: true))
             }
             .frame(width: 150, height: 150)
@@ -538,7 +573,7 @@ private struct PomodoroDetail: View {
             }
             .tint(color)
             Text(loc("完了 %d 回 ・ 集中 %d 分 / 休憩 %d 分", service.completed, Int(settings.focusMinutes), Int(settings.breakMinutes)))
-                .font(.system(size: 10)).foregroundStyle(.secondary)
+                .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
         }
         .frame(width: 230)
     }

@@ -54,6 +54,7 @@ final class PreviewController {
     private let settings = DockSettings.shared
     private var dockSettings: DockSettings { activeContext?.settings ?? .shared }
     let menuSearch = MenuSearch()
+    let session = PanelSession()
 
     var isVisible: Bool { state.phase != .hidden }
     var isPinned: Bool { state.mode != .hover && state.phase != .hidden }
@@ -72,8 +73,10 @@ final class PreviewController {
         show(item, immediate: true, mode: .menu)
         // 標準 Dock の右クリックメニューにあるアプリ独自の項目を取り込む
         guard case .app(let url) = item.kind, let pid = item.runningApp?.processIdentifier else { return }
-        let windowTitles = Set(WindowService.shared.axWindows(pid: pid).values.compactMap { $0.attribute(kAXTitleAttribute) as String? })
         Task {
+            let windowTitles = await Task.detached(priority: .userInitiated) {
+                Set(WindowService.axSnapshot(pid: pid).values.compactMap(\.title))
+            }.value
             let titles = await AppActions.dockMenuTitles(for: url, excluding: windowTitles)
             guard self.state.mode == .menu, self.state.item?.id == item.id, !titles.isEmpty else { return }
             withAnimation(self.dockSettings.spring(0.34, damping: 0.85)) { self.state.dockMenu = titles }
@@ -227,7 +230,15 @@ final class PreviewController {
             }
             // 別のアイコンへ移ったときは、新しい中身が揃うまで今の表示を残し、一度にまとめて切り替える
             if needsWindows {
-                reload(for: current) { [weak self] windows in self?.swap(to: current, mode: mode, anchor: anchor, windows: windows, gen) }
+                reload(for: current) { [weak self] windows in
+                    guard let self, gen == self.generation else { return }
+                    // 一覧が遅れて届き、待ちきれずに先に切り替えていたときは一覧だけ反映する（届いた一覧を捨てないように）
+                    if self.state.item?.id == current.id, self.state.mode == mode {
+                        self.apply(windows)
+                    } else {
+                        self.swap(to: current, mode: mode, anchor: anchor, windows: windows, gen)
+                    }
+                }
                 startRefresh()
                 let work = DispatchWorkItem { [weak self] in self?.swap(to: current, mode: mode, anchor: anchor, windows: [], gen) }
                 openWork = work
@@ -241,6 +252,7 @@ final class PreviewController {
         }
 
         openWork?.cancel()
+        if changed { session.reset() }
         state.anchor = anchor
         state.item = current
         state.mode = mode
@@ -291,6 +303,7 @@ final class PreviewController {
         guard gen == generation, state.phase == .open, state.item?.id != item.id || state.mode != mode else { return }
         openWork?.cancel()
         defer { updateGlobalMonitor() }
+        session.reset()
         withAnimation(dockSettings.spring(0.38, damping: 0.84)) {
             state.anchor = anchor
             state.item = item
@@ -363,7 +376,11 @@ final class PreviewController {
         generation += 1
         let gen = generation
         state.hovering = false
-        guard state.phase != .hidden else { return }
+        guard state.phase != .hidden else {
+            // 開く前（ウィンドウ一覧の取得待ちなど）に離れたときも、再生位置の更新や前面に出したパネルを残さない
+            if state.item != nil { finishHide() }
+            return
+        }
         guard animated else {
             finishHide()
             return
@@ -388,6 +405,7 @@ final class PreviewController {
         state.phase = .hidden
         state.item = nil
         state.windows = []
+        session.reset()
         panel?.orderOut(nil)
         activeContext?.visibility.scheduleHide()
     }
@@ -445,7 +463,7 @@ final class PreviewController {
 
     // 一覧の順番は前回のまま保ち、サムネイルだけの更新はアニメーションさせない（チラつき防止）
     private func apply(_ windows: [WindowInfo]) {
-        let order = Dictionary(uniqueKeysWithValues: state.windows.enumerated().map { ($1.id, $0) })
+        let order = Dictionary(state.windows.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { a, _ in a })
         let sorted = windows.enumerated()
             .sorted { (order[$0.element.id] ?? Int.max, $0.offset) < (order[$1.element.id] ?? Int.max, $1.offset) }
             .map(\.element)

@@ -62,7 +62,7 @@ macOS 26 Tahoe 以降（Apple シリコン / Intel）
 
 GlassDock は分析や利用状況の送信を一切行いません。通信するのは次の場合だけです。
 
-- **天気**：[Open-Meteo](https://open-meteo.com) に緯度・経度（約 1km の精度）または都市名を送ります。現在地の地名を表示するため、macOS の逆ジオコーディング（Apple のサービス）も使います
+- **天気**：[Open-Meteo](https://open-meteo.com) に緯度・経度（約 1km の精度）または都市名を送ります。現在地の地名の表示と、Open-Meteo で見つからない都市名の検索には、macOS の地図の検索（Apple のサービス）も使います
 - **再生中の曲**：Spotify のアートワーク画像を Spotify のサーバーから取得します
 - **アップデート確認**：GitHub から `appcast.xml` と更新ファイルを取得します
 
@@ -115,7 +115,7 @@ GlassDock is a custom Dock for macOS 26 Tahoe and later, drawn with the same Liq
 
 - **Languages**: English and Japanese. Follows your Mac's language, or choose one in Settings → General → Language.
 - **Install**: download the latest zip from [Releases](https://github.com/Ryuto42/GlassDock/releases), move `GlassDock.app` to `/Applications`, then right-click → Open the first time (builds are not notarized yet). Grant Accessibility and Screen Recording when asked.
-- **Privacy**: no analytics. Network access is limited to Open-Meteo (weather, ~1 km precision), Spotify artwork, and GitHub (Sparkle updates, verified with EdDSA signatures). Keystrokes and clicks are only inspected to detect Option+Tab, the Globe+Control shortcuts and title-bar double-clicks; nothing is recorded or sent.
+- **Privacy**: no analytics. Network access is limited to Open-Meteo (weather, ~1 km precision), Apple's map search (place names), Spotify artwork, and GitHub (Sparkle updates, verified with EdDSA signatures). Keystrokes and clicks are only inspected to detect Option+Tab, the Globe+Control shortcuts and title-bar double-clicks; nothing is recorded or sent.
 - **Build**: requires Xcode 26. Run `./build.sh install`.
 - **Note**: uses a few private macOS APIs, so it may break with OS updates and cannot ship on the Mac App Store.
 - **License**: GPL-3.0

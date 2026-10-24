@@ -9,7 +9,11 @@
 "%.2f GB（メモリ逼迫）" = "%.2f GB (memory pressure critical)";
 "%.2f 秒" = "%.2f s";
 "%@ %@%d時間" = "%1$@ %2$@%3$dh";
+"%@ %@%d時間%d分" = "%1$@ %2$@%3$dh %4$dm";
+"%@ で開く" = "Open in %@";
+"%@ に表示" = "Show in %@";
 "%@ のアイコンにする画像を選んでください" = "Choose an image to use as the icon for %@";
+"%@ 空き" = "%@ free";
 "%@ 空き / %@" = "%@ free / %@";
 "%@・%@" = "%@ · %@";
 "%@（%@）" = "%@ (%@)";
@@ -63,6 +67,7 @@
 "SoC 温度" = "SoC Temperature";
 "Spotify かミュージックで再生すると表示されます" = "Play something in Spotify or Music to see it here";
 "Spotify・ミュージックの再生中の曲。クリックで再生/一時停止" = "Current song in Spotify or Music. Click to play or pause.";
+"TB空き" = "TB free";
 "VPN（%@）" = "VPN (%@)";
 "macOS の Dock から読み込む" = "Import from the macOS Dock";
 "macOS の Dock を隠す" = "Hide the macOS Dock";
@@ -70,6 +75,7 @@
 "「%@」を削除しますか？" = "Do you want to delete “%@”?";
 "「%@」を現在の設定で上書きしますか？" = "Do you want to overwrite “%@” with the current settings?";
 "あと%d分" = "in %d min";
+"この Mac にはバッテリーがありません" = "This Mac has no battery";
 "このディスプレイだけの設定を消します。" = "This deletes the settings for this display only.";
 "このディスプレイだけの設定を編集しています。" = "You're editing settings for this display only.";
 "このディスプレイに Dock を表示" = "Show the Dock on This Display";
@@ -81,6 +87,7 @@
 "すべて閉じる" = "Close All";
 "すべて（共通）" = "All Displays (Shared)";
 "すりガラス" = "Frosted";
+"その他のアプリ…" = "Other App…";
 "なし" = "None";
 "にわか雨" = "Showers";
 "にわか雪" = "Snow Showers";
@@ -184,6 +191,7 @@
 "ネオン" = "Neon";
 "ネットワーク" = "Network";
 "ハイライト" = "Highlight";
+"バックグラウンドで実行中" = "Running in the background";
 "バッジの色" = "Badge Color";
 "バッテリー" = "Battery";
 "バッテリー残量と充電状態" = "Battery level and charging status.";
@@ -195,6 +203,7 @@
 "ファイルはありません" = "No Files";
 "フォルダ" = "Folder";
 "フォルダとゴミ箱" = "Folders and Trash";
+"フォルダを開くアプリ" = "App for opening folders";
 "フローティング" = "Floating";
 "ブリッジ（%@）" = "Bridge (%@)";
 "プリセット" = "Presets";
@@ -396,6 +405,7 @@
 "秒を表示" = "Show Seconds";
 "稼働時間" = "Uptime";
 "空き / %.0f GB" = "free / %.0f GB";
+"空き / %@" = "free / %@";
 "空き容量が残りわずかです" = "Very little free space left";
 "空にする" = "Empty Trash";
 "空にすると macOS の名前に戻ります。" = "Leave empty to use the macOS name.";
@@ -408,6 +418,7 @@
 "自動に戻す" = "Reset to Automatic";
 "自動的に隠す" = "Automatically Hide";
 "自動的に隠す：%@" = "Automatically Hide: %@";
+"自動（%@）" = "Automatic (%@)";
 "色" = "Color";
 "色の濃さ" = "Tint Strength";
 "色付き" = "Tinted";
@@ -441,6 +452,7 @@
 "逼迫" = "Critical";
 "逼迫しています" = "Critical";
 "適用" = "Apply";
+"選択" = "Choose";
 "都市" = "City";
 "配置" = "Placement";
 "配置を編集…" = "Edit Placement…";

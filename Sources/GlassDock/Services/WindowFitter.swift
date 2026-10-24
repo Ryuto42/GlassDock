@@ -66,10 +66,11 @@ final class WindowFitter {
         setStable(window, frame)
     }
 
-    func noteFrameIfUnknown(_ window: AXUIElement) {
+    // axFrame は AX の座標（左上原点）。メインスレッドで AX に問い合わせないよう、読んだ値を受け取る
+    func noteFrameIfUnknown(_ window: AXUIElement, frame axFrame: CGRect) {
         guard !stableFrames.contains(where: { CFEqual($0.window, window) }), !animator.isAnimating(window),
-              !pending.contains(where: { CFEqual($0, window) }) else { return }
-        noteFrame(window)
+              !pending.contains(where: { CFEqual($0, window) }), let primary = NSScreen.screens.first else { return }
+        setStable(window, CGRect(x: axFrame.minX, y: primary.frame.maxY - axFrame.maxY, width: axFrame.width, height: axFrame.height))
     }
 
     private func setStable(_ window: AXUIElement, _ frame: CGRect) {
@@ -344,7 +345,11 @@ nonisolated final class WindowAnimator: @unchecked Sendable {
         nonisolated(unsafe) let w = window
         queue.async { [self] in
             defer {
-                lock.withLock { running[key, default: 1] -= 1 }
+                lock.withLock {
+                    running[key, default: 1] -= 1
+                    // 動いているものが無くなったら記録を消し、閉じたウィンドウの分が溜まり続けないようにする
+                    if running[key] == 0 { running[key] = nil; generations[key] = nil }
+                }
                 done()
             }
             let start = CACurrentMediaTime()
@@ -411,8 +416,6 @@ nonisolated final class TitleBarTap: @unchecked Sendable {
 
     init(send: @escaping @Sendable (AXUIElement, TileAction) -> Void) {
         self.send = send
-        // 応答しないアプリで入力全体が止まらないよう、短く打ち切る
-        AXUIElementSetMessagingTimeout(systemWide, 0.15)
     }
 
     func setScreens(_ screens: [CGRect]) {

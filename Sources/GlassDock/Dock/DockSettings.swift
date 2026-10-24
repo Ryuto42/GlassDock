@@ -156,6 +156,8 @@ final class DockSettings {
     var showOnAllDisplays: Bool { didSet { save(showOnAllDisplays, "showOnAllDisplays") } }
     var showTrash: Bool { didSet { save(showTrash, "showTrash") } }
     var hiddenFolders: [String] { didSet { save(hiddenFolders, "hiddenFolders") } }
+    // フォルダを開くアプリのバンドル ID。空なら macOS の既定
+    var fileViewer: String { didSet { save(fileViewer, "fileViewer") } }
 
     // 背景
     var material: DockMaterial { didSet { save(material.rawValue, "material2") } }
@@ -230,6 +232,7 @@ final class DockSettings {
         showOnAllDisplays = value("showOnAllDisplays", true)
         showTrash = value("showTrash", true)
         hiddenFolders = value("hiddenFolders", [String]())
+        fileViewer = value("fileViewer", "")
         dimMinimized = value("dimMinimized", true)
         indicatorShowsWindowCount = value("indicatorShowsWindowCount", true)
 
@@ -302,6 +305,7 @@ final class DockSettings {
         field("animationSpeed", \.animationSpeed), field("launchBounce", \.launchBounce),
         field("showControlCenter", \.showControlCenter), field("showOnAllDisplays", \.showOnAllDisplays),
         field("showTrash", \.showTrash), field("hiddenFolders", \.hiddenFolders),
+        field("fileViewer", \.fileViewer),
         field("material2", \.material), field("appearanceMode", \.appearanceMode), field("tintHex", \.tintHex),
         field("tintStrength", \.tintStrength), field("cornerRatio", \.cornerRatio), field("borderWidth", \.borderWidth),
         field("borderOpacity", \.borderOpacity), field("shadowStrength", \.shadowStrength),
@@ -382,7 +386,7 @@ final class DockSettings {
 
     // ディスプレイの名前を覚えておく（外したあとも設定画面に名前を出すため）
     static func remember(display id: String, name: String) {
-        var names = UserDefaults.standard.dictionary(forKey: "displayNames") as? [String: String] ?? [:]
+        var names = stringDictionary("displayNames")
         guard names[id] != name else { return }
         names[id] = name
         UserDefaults.standard.set(names, forKey: "displayNames")
@@ -390,18 +394,21 @@ final class DockSettings {
 
     // 設定画面で付けた名前があればそれを、なければ macOS の名前を使う
     static func displayName(_ id: String) -> String {
-        let d = UserDefaults.standard
-        if let alias = (d.dictionary(forKey: "displayAliases") as? [String: String])?[id], !alias.isEmpty { return alias }
-        if let name = (d.dictionary(forKey: "displayNames") as? [String: String])?[id], !name.isEmpty { return name }
+        if let alias = stringDictionary("displayAliases")[id], !alias.isEmpty { return alias }
+        if let name = systemDisplayName(id), !name.isEmpty { return name }
         return loc("ディスプレイ %@", id)
     }
 
     static func systemDisplayName(_ id: String) -> String? {
-        (UserDefaults.standard.dictionary(forKey: "displayNames") as? [String: String])?[id]
+        stringDictionary("displayNames")[id]
+    }
+
+    private static func stringDictionary(_ key: String) -> [String: String] {
+        UserDefaults.standard.dictionary(forKey: key) as? [String: String] ?? [:]
     }
 
     static func rename(display id: String, to name: String) {
-        var aliases = UserDefaults.standard.dictionary(forKey: "displayAliases") as? [String: String] ?? [:]
+        var aliases = stringDictionary("displayAliases")
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         aliases[id] = trimmed.isEmpty ? nil : trimmed
         UserDefaults.standard.set(aliases, forKey: "displayAliases")
@@ -409,7 +416,7 @@ final class DockSettings {
 
     // 一度でも接続したディスプレイ
     static var knownDisplays: [String] {
-        let names = UserDefaults.standard.dictionary(forKey: "displayNames") as? [String: String] ?? [:]
+        let names = stringDictionary("displayNames")
         return Array(Set(names.keys).union(shared.customDisplays).union(shared.hiddenDisplays))
     }
 
@@ -417,11 +424,10 @@ final class DockSettings {
     static func forget(display id: String) {
         setCustom(false, display: id)
         shared.hiddenDisplays.removeAll { $0 == id }
-        let d = UserDefaults.standard
         for key in ["displayNames", "displayAliases"] {
-            var dict = d.dictionary(forKey: key) as? [String: String] ?? [:]
+            var dict = stringDictionary(key)
             dict[id] = nil
-            d.set(dict, forKey: key)
+            UserDefaults.standard.set(dict, forKey: key)
         }
     }
 

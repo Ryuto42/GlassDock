@@ -3,9 +3,6 @@ import ApplicationServices
 @preconcurrency import ScreenCaptureKit
 import SwiftUI
 
-@_silgen_name("_AXUIElementGetWindow")
-nonisolated private func switcherAXGetWindow(_ element: AXUIElement, _ id: UnsafeMutablePointer<CGWindowID>) -> AXError
-
 @Observable
 final class SwitcherState {
     var windows: [WindowInfo] = []
@@ -306,6 +303,11 @@ final class WindowSwitcher {
         if let icon = app.icon { state.icons[pid] = icon }
     }
 
+    // コントロールセンターの「起動中」に出すウィンドウ数にも使う
+    nonisolated static func windowCounts(_ pids: [pid_t]) -> [pid_t: Int] {
+        scanAX(pids).mapValues(\.count)
+    }
+
     nonisolated private static func scanAX(_ pids: [pid_t]) -> [pid_t: [AXWindowEntry]] {
         func value<T>(_ e: AXUIElement, _ name: String) -> T? {
             var v: CFTypeRef?
@@ -323,7 +325,7 @@ final class WindowSwitcher {
             let entries = windows.compactMap { w -> AXWindowEntry? in
                 AXUIElementSetMessagingTimeout(w, 0.3)
                 var id: CGWindowID = 0
-                guard switcherAXGetWindow(w, &id) == .success, id != 0 else { return nil }
+                guard let getWindow = axGetWindow, getWindow(w, &id) == .success, id != 0 else { return nil }
                 let subrole: String? = value(w, kAXSubroleAttribute)
                 return AXWindowEntry(
                     id: id, title: value(w, kAXTitleAttribute) ?? "",

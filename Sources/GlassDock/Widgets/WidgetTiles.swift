@@ -48,11 +48,6 @@ struct WidgetTile: View {
     }
 }
 
-private extension View {
-    // 以前は色付きの背景だったが、すべてのウィジェットを Dock と同じガラスに揃えた
-    func tileBackground(_ colors: [Color]) -> some View { self }
-}
-
 struct AnalogClockTile: View {
     let h: CGFloat
     private var settings: DockSettings { .shared }
@@ -97,24 +92,37 @@ struct DigitalClockTile: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: settings.clockSeconds ? 1 : 10)) { ctx in
             VStack(spacing: h * 0.02) {
-                Text(ctx.date, format: timeFormat)
+                Text(ctx.date, format: ClockFormat.time(seconds: settings.clockSeconds, h24: settings.clock24h))
                     .font(.system(size: h * 0.36, weight: .semibold, design: .rounded))
                     .monospacedDigit()
+                    .lineLimit(1)
                     .minimumScaleFactor(0.5)
                 Text(ctx.date, format: .dateTime.month(.defaultDigits).day().weekday(.short))
                     .font(.system(size: h * 0.14, weight: .medium))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
             }
+            .padding(.horizontal, h * 0.08)
             .foregroundStyle(.primary)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .tileBackground([Color(white: 0.2), Color(white: 0.07)])
         }
     }
+}
 
-    private var timeFormat: Date.FormatStyle {
-        var f = Date.FormatStyle.dateTime.hour(settings.clock24h ? .twoDigits(amPM: .omitted) : .defaultDigits(amPM: .abbreviated)).minute(.twoDigits)
-        if settings.clockSeconds { f = f.second(.twoDigits) }
-        return f
+enum ClockFormat {
+    // Date.FormatStyle の hour はロケールの 12/24 時間制に従い、設定を無視してしまう（英語で 24 時間制にしても「01:05」になる）。
+    // 設定に合わせて時間制を固定したロケールで書式化する
+    static func locale(h24: Bool) -> Locale {
+        var c = Locale.Components(locale: .current)
+        c.hourCycle = h24 ? .zeroToTwentyThree : .oneToTwelve
+        return Locale(components: c)
+    }
+
+    static func time(seconds: Bool, h24: Bool) -> Date.FormatStyle {
+        var f = Date.FormatStyle.dateTime.hour(h24 ? .twoDigits(amPM: .omitted) : .defaultDigits(amPM: .abbreviated)).minute(.twoDigits)
+        if seconds { f = f.second(.twoDigits) }
+        return f.locale(locale(h24: h24))
     }
 }
 
@@ -139,12 +147,12 @@ struct WorldClockTile: View {
                             .font(.system(size: h * 0.11))
                             .foregroundStyle(.secondary)
                     }
+                    .lineLimit(1)
                     .minimumScaleFactor(0.6)
                 }
             }
             .foregroundStyle(.primary)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .tileBackground([Color(red: 0.16, green: 0.2, blue: 0.36), Color(red: 0.06, green: 0.07, blue: 0.16)])
         }
     }
 }
@@ -160,17 +168,23 @@ enum WorldClock {
     }
 
     static func time(_ date: Date, _ tz: TimeZone, h24: Bool) -> String {
-        let f = DateFormatter()
+        var f = Date.FormatStyle.dateTime.hour(h24 ? .twoDigits(amPM: .omitted) : .defaultDigits(amPM: .omitted)).minute(.twoDigits)
+            .locale(ClockFormat.locale(h24: h24))
         f.timeZone = tz
-        f.dateFormat = h24 ? "HH:mm" : "h:mm"
-        return f.string(from: date)
+        return date.formatted(f)
     }
 
     static func offset(_ date: Date, _ tz: TimeZone) -> String {
-        let diff = (tz.secondsFromGMT(for: date) - TimeZone.current.secondsFromGMT(for: date)) / 3600
-        let day = Calendar.current.dateComponents(in: tz, from: date).day! - Calendar.current.component(.day, from: date)
-        let dayText = day > 0 ? loc("明日") : day < 0 ? loc("昨日") : loc("今日")
-        return loc("%@ %@%d時間", dayText, diff >= 0 ? "+" : "", diff)
+        let minutes = (tz.secondsFromGMT(for: date) - TimeZone.current.secondsFromGMT(for: date)) / 60
+        // 日だけの引き算だと月末（31 日と 1 日）で逆になるため、年月日で比べる
+        let cal = Calendar.current
+        let there = cal.dateComponents(in: tz, from: date), here = cal.dateComponents(in: .current, from: date)
+        let a = (there.year ?? 0, there.month ?? 0, there.day ?? 0), b = (here.year ?? 0, here.month ?? 0, here.day ?? 0)
+        let dayText = a > b ? loc("明日") : a < b ? loc("昨日") : loc("今日")
+        let sign = minutes < 0 ? "-" : "+"
+        // インド（+5:30）など 30 分単位の時差もある
+        let h = abs(minutes) / 60, m = abs(minutes) % 60
+        return m == 0 ? loc("%@ %@%d時間", dayText, sign, h) : loc("%@ %@%d時間%d分", dayText, sign, h, m)
     }
 }
 
@@ -198,19 +212,25 @@ struct DayProgressTile: View {
             ZStack {
                 ProgressRing(progress: p, color: .mint, width: h * 0.1)
                     .padding(h * 0.14)
-                Text("\(Int(p * 100))%")
+                Text("\(Fmt.percent(p))%")
                     .font(.system(size: h * 0.2, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
                     .foregroundStyle(.primary)
+                    .padding(.horizontal, h * 0.24)
             }
-            .tileBackground([Color(red: 0.1, green: 0.25, blue: 0.25), Color(red: 0.03, green: 0.1, blue: 0.12)])
         }
     }
 }
 
 enum DayProgress {
+    // 夏時間の切り替え日は 1 日が 23・25 時間になるため、86400 秒で割らない
     static func value(_ date: Date) -> Double {
-        let start = Calendar.current.startOfDay(for: date)
-        return date.timeIntervalSince(start) / 86_400
+        let cal = Calendar.current
+        let start = cal.startOfDay(for: date)
+        guard let end = cal.date(byAdding: .day, value: 1, to: start), end > start else { return 0 }
+        return min(max(date.timeIntervalSince(start) / end.timeIntervalSince(start), 0), 1)
     }
 }
 
@@ -223,10 +243,13 @@ struct CalendarTile: View {
                 Text(ctx.date, format: .dateTime.weekday(.abbreviated))
                     .font(.system(size: h * 0.17, weight: .semibold))
                     .foregroundStyle(.red)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
                     .padding(.top, h * 0.08)
                 Text("\(Calendar.current.component(.day, from: ctx.date))")
                     .font(.system(size: h * 0.5, weight: .light))
                     .foregroundStyle(.primary)
+                    .lineLimit(1)
                     .minimumScaleFactor(0.5)
                 Spacer(minLength: 0)
             }
@@ -248,6 +271,8 @@ struct AgendaTile: View {
                         Text(Agenda.relative(e, now: ctx.date))
                             .font(.system(size: h * 0.13, weight: .semibold))
                             .foregroundStyle(Color(nsColor: e.color))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
                         Text(e.title)
                             .font(.system(size: h * 0.17, weight: .semibold))
                             .lineLimit(2)
@@ -257,6 +282,7 @@ struct AgendaTile: View {
                 } else {
                     Image(systemName: "calendar.badge.checkmark").font(.system(size: h * 0.3))
                     Text(service.eventAccess ? loc("予定なし") : loc("未許可")).font(.system(size: h * 0.16, weight: .semibold))
+                        .lineLimit(1).minimumScaleFactor(0.6)
                 }
             }
             .padding(.horizontal, h * 0.14)
@@ -269,7 +295,7 @@ enum Agenda {
     static func relative(_ e: CalendarService.Event, now: Date) -> String {
         if e.allDay { return loc("終日") }
         if e.start <= now { return loc("進行中") }
-        let mins = Int(e.start.timeIntervalSince(now) / 60)
+        let mins = max(0, Int(e.start.timeIntervalSince(now) / 60))
         if mins < 60 { return loc("あと%d分", mins) }
         if Calendar.current.isDateInToday(e.start) { return e.start.formatted(date: .omitted, time: .shortened) }
         return e.start.formatted(.dateTime.month().day().hour().minute())
@@ -286,16 +312,20 @@ struct RemindersTile: View {
                 .font(.system(size: h * 0.4, weight: .semibold))
                 .foregroundStyle(.orange)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if !service.reminders.isEmpty {
-                Text("\(service.reminders.count)")
+            if service.reminderCount > 0 {
+                // 2 桁以上でも折り返さないよう 1 行に固定する
+                Text(service.reminderCount > 99 ? "99+" : "\(service.reminderCount)")
                     .font(.system(size: h * 0.17, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .fixedSize()
                     .foregroundStyle(.white)
                     .padding(.horizontal, h * 0.06)
+                    .frame(minWidth: h * 0.22)
                     .background(Capsule().fill(.orange))
                     .padding(h * 0.08)
             }
         }
-        .tileBackground([Color(red: 1, green: 0.62, blue: 0.2), Color(red: 0.95, green: 0.42, blue: 0.1)])
     }
 }
 
@@ -306,7 +336,6 @@ struct WeatherTile: View {
 
     var body: some View {
         let s = service.snapshot
-        let day = s?.isDay ?? true
         Group {
             if let s {
                 if compact {
@@ -339,20 +368,9 @@ struct WeatherTile: View {
             }
         }
         .foregroundStyle(.primary)
+        .lineLimit(1)
         .minimumScaleFactor(0.6)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .tileBackground(WeatherPalette.colors(code: s?.code ?? 0, day: day))
-    }
-}
-
-enum WeatherPalette {
-    static func colors(code: Int, day: Bool) -> [Color] {
-        if !day { return [Color(red: 0.1, green: 0.14, blue: 0.32), Color(red: 0.03, green: 0.05, blue: 0.14)] }
-        switch code {
-        case 0, 1: return [Color(red: 0.25, green: 0.6, blue: 1), Color(red: 0.1, green: 0.4, blue: 0.85)]
-        case 2, 3, 45, 48: return [Color(red: 0.5, green: 0.6, blue: 0.72), Color(red: 0.32, green: 0.4, blue: 0.52)]
-        default: return [Color(red: 0.35, green: 0.45, blue: 0.6), Color(red: 0.18, green: 0.24, blue: 0.36)]
-        }
     }
 }
 
@@ -419,7 +437,6 @@ struct VolumeTile: View {
         }
         .foregroundStyle(.primary)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .tileBackground([Color(red: 0.36, green: 0.36, blue: 0.42), Color(red: 0.16, green: 0.16, blue: 0.2)])
     }
 }
 
@@ -433,18 +450,20 @@ struct SystemTile: View {
             gauge("MEM", service.memory, .cyan)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .tileBackground([Color(white: 0.16), Color(white: 0.06)])
     }
 
     private func gauge(_ label: String, _ v: Double, _ color: Color) -> some View {
         ZStack {
             ProgressRing(progress: v, color: color, width: h * 0.08)
             VStack(spacing: 0) {
-                Text("\(Int(v * 100))")
+                Text("\(Fmt.percent(v))")
                     .font(.system(size: h * 0.17, weight: .bold, design: .rounded))
                     .monospacedDigit()
                 Text(label).font(.system(size: h * 0.08, weight: .semibold)).foregroundStyle(.secondary)
             }
+            .lineLimit(1)
+            .minimumScaleFactor(0.6)
+            .padding(.horizontal, h * 0.08)
             .foregroundStyle(.primary)
         }
         .frame(width: h * 0.62, height: h * 0.62)
@@ -458,17 +477,28 @@ struct BatteryTile: View {
     var body: some View {
         let color: Color = service.level < 0.2 && !service.charging ? .red : .green
         ZStack {
-            ProgressRing(progress: service.level, color: color, width: h * 0.09).padding(h * 0.14)
-            VStack(spacing: 0) {
-                Image(systemName: service.charging ? "bolt.fill" : "battery.100percent")
-                    .font(.system(size: h * 0.12, weight: .bold))
-                    .foregroundStyle(service.charging ? .yellow : .white.opacity(0.7))
-                Text("\(Int(service.level * 100))")
-                    .font(.system(size: h * 0.2, weight: .bold, design: .rounded))
-                    .foregroundStyle(.primary)
+            if service.hasBattery {
+                ProgressRing(progress: service.level, color: color, width: h * 0.09).padding(h * 0.14)
+                VStack(spacing: 0) {
+                    // 白固定だとライトモードで見えないため secondary にする
+                    Image(systemName: service.charging ? "bolt.fill" : "battery.100percent")
+                        .font(.system(size: h * 0.12, weight: .bold))
+                        .foregroundStyle(service.charging ? AnyShapeStyle(Color.yellow) : AnyShapeStyle(HierarchicalShapeStyle.secondary))
+                    Text("\(Fmt.percent(service.level))")
+                        .font(.system(size: h * 0.2, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                        .foregroundStyle(.primary)
+                }
+                .padding(.horizontal, h * 0.24)
+            } else {
+                // バッテリーのない Mac（デスクトップ）
+                Image(systemName: "powerplug.fill")
+                    .font(.system(size: h * 0.3, weight: .semibold))
+                    .foregroundStyle(.secondary)
             }
         }
-        .tileBackground([Color(white: 0.18), Color(white: 0.07)])
     }
 }
 
@@ -477,17 +507,23 @@ struct StorageTile: View {
     let h: CGFloat
 
     var body: some View {
-        let used = service.diskTotal > 0 ? 1 - service.diskFree / service.diskTotal : 0
+        let free = service.diskFree, total = service.diskTotal
+        let used = total > 0 ? 1 - free / total : 0
+        // 1000 GB 以上は TB にして桁を抑える
+        let tb = free >= 999.5
         ZStack {
             ProgressRing(progress: used, color: .indigo, width: h * 0.09).padding(h * 0.14)
             VStack(spacing: 0) {
-                Text("\(Int(service.diskFree))")
+                Text(total <= 0 ? "—" : tb ? String(format: "%.1f", free / 1000) : "\(Int(free))")
                     .font(.system(size: h * 0.2, weight: .bold, design: .rounded))
-                Text("GB空き").font(.system(size: h * 0.08, weight: .semibold)).foregroundStyle(.secondary)
+                    .monospacedDigit()
+                Text(loc(tb ? "TB空き" : "GB空き")).font(.system(size: h * 0.08, weight: .semibold)).foregroundStyle(.secondary)
             }
+            .lineLimit(1)
+            .minimumScaleFactor(0.6)
+            .padding(.horizontal, h * 0.24)
             .foregroundStyle(.primary)
         }
-        .tileBackground([Color(red: 0.2, green: 0.2, blue: 0.32), Color(red: 0.08, green: 0.08, blue: 0.14)])
     }
 }
 
@@ -497,9 +533,9 @@ struct NetworkTile: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: h * 0.06) {
-            Label(SystemStatsService.rate(service.down), systemImage: "arrow.down")
+            Label(Fmt.rate(service.down), systemImage: "arrow.down")
                 .foregroundStyle(.cyan)
-            Label(SystemStatsService.rate(service.up), systemImage: "arrow.up")
+            Label(Fmt.rate(service.up), systemImage: "arrow.up")
                 .foregroundStyle(.pink)
         }
         .font(.system(size: h * 0.16, weight: .semibold, design: .rounded))
@@ -511,7 +547,6 @@ struct NetworkTile: View {
         .background(alignment: .bottom) {
             Sparkline(values: service.netHistory).fill(.cyan.opacity(0.18)).frame(height: h * 0.5)
         }
-        .tileBackground([Color(white: 0.16), Color(white: 0.06)])
     }
 }
 
@@ -522,11 +557,14 @@ struct Sparkline: Shape {
     func path(in rect: CGRect) -> Path {
         var p = Path()
         guard values.count > 1 else { return p }
-        let maxV = maxValue ?? max(values.max() ?? 1, 0.0001)
+        let top = maxValue ?? values.max() ?? 1
+        let maxV = top.isFinite ? max(top, 0.0001) : 1
         let step = rect.width / CGFloat(values.count - 1)
         p.move(to: CGPoint(x: 0, y: rect.maxY))
         for (i, v) in values.enumerated() {
-            p.addLine(to: CGPoint(x: CGFloat(i) * step, y: rect.maxY - rect.height * CGFloat(v / maxV)))
+            // 上限を超えた値や NaN で枠の外に描かないようにする
+            let f = v.isFinite ? min(max(v / maxV, 0), 1) : 0
+            p.addLine(to: CGPoint(x: CGFloat(i) * step, y: rect.maxY - rect.height * CGFloat(f)))
         }
         p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
         p.closeSubpath()
@@ -549,10 +587,12 @@ struct PomodoroTile: View {
                 Text(service.label)
                     .font(.system(size: h * 0.17, weight: .bold, design: .rounded))
                     .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
                     .foregroundStyle(.primary)
             }
+            .padding(.horizontal, h * 0.2)
         }
-        .tileBackground([Color(white: 0.18), Color(white: 0.07)])
     }
 }
 
@@ -563,15 +603,17 @@ struct QuickNoteTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: h * 0.04) {
             Image(systemName: "note.text").font(.system(size: h * 0.2, weight: .semibold))
-            Text(store.text.isEmpty ? loc("メモ") : store.text)
+                .foregroundStyle(.yellow)
+            // 先頭の空行で中身が見えなくならないよう前後の空白を除く。黄色の文字はライトモードで読めないので primary にする
+            let text = store.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            Text(text.isEmpty ? loc("メモ") : text)
                 .font(.system(size: h * 0.12, weight: .medium))
                 .lineLimit(2)
+                .foregroundStyle(.primary)
                 .opacity(0.8)
         }
-        .foregroundStyle(.yellow)
         .padding(h * 0.12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .tileBackground([Color(red: 1, green: 0.92, blue: 0.5), Color(red: 1, green: 0.82, blue: 0.3)])
     }
 }
 
@@ -588,11 +630,13 @@ struct ClipboardTile: View {
             if !service.items.isEmpty {
                 Text("\(service.items.count)")
                     .font(.system(size: h * 0.14, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .fixedSize()
                     .foregroundStyle(.secondary)
                     .padding(h * 0.08)
             }
         }
-        .tileBackground([Color(red: 0.35, green: 0.55, blue: 0.95), Color(red: 0.2, green: 0.35, blue: 0.8)])
     }
 }
 

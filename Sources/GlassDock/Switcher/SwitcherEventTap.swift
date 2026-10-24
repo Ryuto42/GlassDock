@@ -107,6 +107,13 @@ nonisolated final class SwitcherEventTap: @unchecked Sendable {
             return true
         }
 
+        // タップが一時的に止まって Option を離した入力を取りこぼすと、すべてのキーを奪い続けてしまう。
+        // 検索中でなく Option が押されていなければ、その時点で決定して閉じ、キーはアプリに渡す
+        if !searching, !flags.contains(.maskAlternate) {
+            active = false
+            send(.commit)
+            return false
+        }
         swallowedUps.insert(code)
         switch code {
         case Key.tab: send(.step(shift ? -1 : 1))

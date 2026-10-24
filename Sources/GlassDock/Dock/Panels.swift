@@ -91,7 +91,6 @@ final class DockPanelController {
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { _ in MainActor.assumeIsolated { DockPanelController.shared.syncScreens() } })
         observeSettings()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { DockPanelController.shared.scheduleHideAll() }
     }
 
     func scheduleHideAll() {
@@ -114,10 +113,7 @@ final class DockPanelController {
         let screens = (settings.showOnAllDisplays ? NSScreen.screens : Array(NSScreen.screens.prefix(1)))
             .filter { !settings.hiddenDisplays.contains(Self.screenID($0)) }
         let wanted = Dictionary(screens.map { (Self.screenID($0), $0) }, uniquingKeysWith: { a, _ in a })
-        for (id, dock) in docks where wanted[id] == nil {
-            dock.panel.orderOut(nil)
-            docks[id] = nil
-        }
+        for id in docks.keys where wanted[id] == nil { removeDock(id) }
         for (id, screen) in wanted {
             DockSettings.remember(display: id, name: screen.localizedName)
             let desired = DockSettings.settings(forDisplay: id)
@@ -128,8 +124,7 @@ final class DockPanelController {
                     continue
                 }
                 // 専用の設定に切り替わったら作り直す
-                dock.panel.orderOut(nil)
-                docks[id] = nil
+                removeDock(id)
             }
             let context = DockContext(id: id, settings: desired)
             let p = OverlayPanel(level: NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.dockWindow))))
@@ -143,8 +138,17 @@ final class DockPanelController {
             context.watcher.window = p
             docks[id] = Dock(panel: p, context: context, screen: screen)
             p.orderFrontRegardless()
+            // 起動時や、あとから接続したディスプレイでも、自動的に隠す設定ならしばらくして隠す
+            context.visibility.scheduleHide(after: 2)
         }
         layout()
+    }
+
+    // ホバー中に消えると、マウスの監視とタイマーが残り続けるため止めておく
+    private func removeDock(_ id: String) {
+        guard let dock = docks.removeValue(forKey: id) else { return }
+        dock.context.watcher.end()
+        dock.panel.orderOut(nil)
     }
 
     private func observeSettings() {
@@ -171,7 +175,7 @@ final class DockPanelController {
                 if !(preview.isPinned && preview.state.mode == .control) { preview.hide(animated: false) }
                 PreviewController.shared.updateAppearance()
                 for dock in c.docks.values { dock.panel.appearance = dock.context.settings.appearanceMode.nsAppearance }
-                DockModel.shared.invalidateIcons()
+                DockModel.shared.invalidateIconsIfNeeded()
                 c.syncScreens()
                 c.observeSettings()
                 c.scheduleHideAll()

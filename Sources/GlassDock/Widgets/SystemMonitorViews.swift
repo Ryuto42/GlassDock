@@ -10,11 +10,14 @@ struct GPUTile: View {
         ZStack {
             ProgressRing(progress: service.usage, color: .purple, width: h * 0.09).padding(h * 0.14)
             VStack(spacing: 0) {
-                Text("\(Int(service.usage * 100))")
+                Text(service.available ? "\(Fmt.percent(service.usage))" : "—")
                     .font(.system(size: h * 0.2, weight: .bold, design: .rounded))
                     .monospacedDigit()
                 Text("GPU").font(.system(size: h * 0.08, weight: .semibold)).foregroundStyle(.secondary)
             }
+            .lineLimit(1)
+            .minimumScaleFactor(0.6)
+            .padding(.horizontal, h * 0.24)
         }
     }
 }
@@ -33,6 +36,9 @@ struct MemoryTile: View {
                     .monospacedDigit()
                 Text("GB").font(.system(size: h * 0.08, weight: .semibold)).foregroundStyle(.secondary)
             }
+            .lineLimit(1)
+            .minimumScaleFactor(0.6)
+            .padding(.horizontal, h * 0.24)
         }
     }
 }
@@ -57,12 +63,14 @@ struct ProcessesTile: View {
                     Text(String(format: "CPU %.0f%%", top.cpu * 100))
                         .font(.system(size: h * 0.13, weight: .medium, design: .rounded))
                         .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
                         .foregroundStyle(top.cpu > 1.5 ? .orange : .secondary)
                 }
                 Spacer(minLength: 0)
             } else {
                 Image(systemName: "list.bullet.rectangle").font(.system(size: h * 0.3))
-                Text("集計中…").font(.system(size: h * 0.14))
+                Text("集計中…").font(.system(size: h * 0.14)).lineLimit(1).minimumScaleFactor(0.6)
             }
         }
         .padding(.horizontal, h * 0.12)
@@ -78,7 +86,7 @@ struct PeripheralsTile: View {
         HStack(spacing: h * 0.12) {
             if service.devices.isEmpty {
                 Image(systemName: "dot.radiowaves.left.and.right").font(.system(size: h * 0.28))
-                Text(service.loading ? loc("確認中…") : loc("なし")).font(.system(size: h * 0.14))
+                Text(service.loading ? loc("確認中…") : loc("なし")).font(.system(size: h * 0.14)).lineLimit(1).minimumScaleFactor(0.6)
             } else {
                 ForEach(service.devices.prefix(3)) { d in
                     VStack(spacing: h * 0.03) {
@@ -87,6 +95,9 @@ struct PeripheralsTile: View {
                             .frame(height: h * 0.26)
                         Text("\(d.level)%")
                             .font(.system(size: h * 0.13, weight: .semibold, design: .rounded))
+                            .monospacedDigit()
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
                             .foregroundStyle(d.level <= 20 ? .red : .primary)
                     }
                 }
@@ -125,13 +136,13 @@ struct GPUDetail: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(service.model.isEmpty ? "GPU" : service.model).font(.system(size: 14, weight: .semibold))
+                    Text(service.model.isEmpty ? "GPU" : service.model).font(.system(size: 14, weight: .semibold)).lineLimit(1)
                     if let cores = service.cores {
                         Text(loc("%d コア", cores)).font(.system(size: 11)).foregroundStyle(.secondary)
                     }
                 }
                 Spacer()
-                Text("\(Int(service.usage * 100))%")
+                Text(service.available ? "\(Fmt.percent(service.usage))%" : "—")
                     .font(.system(size: 26, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .contentTransition(.numericText())
@@ -175,7 +186,7 @@ struct MemoryDetail: View {
             ForEach(parts, id: \.0) { part in
                 HStack {
                     Circle().fill(part.2).frame(width: 7, height: 7)
-                    Text(loc(part.0)).font(.system(size: 12))
+                    Text(loc(part.0)).font(.system(size: 12)).lineLimit(1)
                     Spacer()
                     Text(String(format: "%.1f GB", part.1)).font(.system(size: 12, design: .rounded)).monospacedDigit()
                 }
@@ -235,9 +246,10 @@ struct ProcessesDetail: View {
                     .frame(width: 20, height: 20)
                     Text(p.name).font(.system(size: 12)).lineLimit(1)
                     Spacer(minLength: 6)
-                    Text(byMemory ? Self.memory(p.memoryMB) : String(format: "%.0f%%", p.cpu * 100))
+                    Text(byMemory ? Fmt.memory(p.memoryMB * 1_048_576) : String(format: "%.0f%%", p.cpu * 100))
                         .font(.system(size: 12, weight: .medium, design: .rounded))
                         .monospacedDigit()
+                        .fixedSize()
                         .foregroundStyle(!byMemory && p.cpu > 1.5 ? .orange : .primary)
                 }
                 .transition(.opacity)
@@ -246,13 +258,10 @@ struct ProcessesDetail: View {
                 Text("集計中…").font(.system(size: 12)).foregroundStyle(.secondary)
             }
             Text(loc("CPU は 1 コア分を 100% として表示します")).font(.system(size: 9)).foregroundStyle(.tertiary)
+                .lineLimit(1).minimumScaleFactor(0.8)
         }
         .frame(width: 260)
         .animation(.smooth, value: service.topCPU.map(\.id))
-    }
-
-    static func memory(_ mb: Double) -> String {
-        mb >= 1024 ? String(format: "%.1f GB", mb / 1024) : String(format: "%.0f MB", mb)
     }
 }
 
@@ -277,8 +286,8 @@ struct PeripheralsDetail: View {
                         Text(d.name).font(.system(size: 12, weight: .medium)).lineLimit(1)
                         Text(loc(d.kind)).font(.system(size: 10)).foregroundStyle(.secondary)
                     }
-                    Spacer()
-                    ProgressView(value: Double(d.level) / 100).frame(width: 60).tint(d.level <= 20 ? .red : .green)
+                    Spacer(minLength: 4)
+                    ProgressView(value: min(max(Double(d.level) / 100, 0), 1)).frame(width: 60).tint(d.level <= 20 ? .red : .green)
                     Text("\(d.level)%").font(.system(size: 12, weight: .semibold, design: .rounded)).monospacedDigit().frame(width: 36, alignment: .trailing)
                 }
             }
@@ -300,8 +309,8 @@ struct HealthDetail: View {
                     .foregroundStyle(Color(nsColor: overall.color))
                 VStack(alignment: .leading, spacing: 1) {
                     Text(overall == .good ? loc("問題は見つかりません") : overall == .critical ? loc("対応が必要です") : loc("注意が必要な項目があります"))
-                        .font(.system(size: 14, weight: .semibold))
-                    Text("Mac の状態をまとめて確認しています").font(.system(size: 11)).foregroundStyle(.secondary)
+                        .font(.system(size: 14, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8)
+                    Text("Mac の状態をまとめて確認しています").font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
                 }
             }
             Divider()
@@ -309,10 +318,10 @@ struct HealthDetail: View {
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: c.symbol).frame(width: 20).foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(c.title).font(.system(size: 12, weight: .medium))
+                        Text(c.title).font(.system(size: 12, weight: .medium)).lineLimit(1)
                         Text(c.detail).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
                     }
-                    Spacer()
+                    Spacer(minLength: 4)
                     Circle().fill(Color(nsColor: c.level.color)).frame(width: 8, height: 8).padding(.top, 4)
                 }
             }
@@ -343,9 +352,9 @@ struct BatteryHealthRows: View {
 
     private func row(_ title: String, _ value: String, _ color: Color) -> some View {
         HStack {
-            Text(loc(title)).font(.system(size: 11)).foregroundStyle(.secondary)
-            Spacer()
-            Text(value).font(.system(size: 11, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(color)
+            Text(loc(title)).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+            Spacer(minLength: 4)
+            Text(value).font(.system(size: 11, weight: .semibold, design: .rounded)).monospacedDigit().fixedSize().foregroundStyle(color)
         }
     }
 }
@@ -372,11 +381,14 @@ struct OverviewTile: View {
         ZStack {
             ProgressRing(progress: value, color: color, width: h * 0.06)
             VStack(spacing: 0) {
-                Text("\(Int(value * 100))")
+                Text("\(Fmt.percent(value))")
                     .font(.system(size: h * 0.13, weight: .bold, design: .rounded))
                     .monospacedDigit()
                 Text(label).font(.system(size: h * 0.065, weight: .semibold)).foregroundStyle(.secondary)
             }
+            .lineLimit(1)
+            .minimumScaleFactor(0.6)
+            .padding(.horizontal, h * 0.06)
         }
         .frame(width: h * 0.5, height: h * 0.5)
     }
@@ -411,19 +423,20 @@ struct OverviewDetail: View {
             HStack(alignment: .top, spacing: 14) {
                 LazyVGrid(columns: [GridItem(.fixed(Self.cardSize.width), spacing: 8), GridItem(.fixed(Self.cardSize.width), spacing: 8)], spacing: 8) {
                     card(.cpu, "CPU", String(format: "%.0f%%", hub.system.cpu * 100), .green, history: hub.system.cpuHistory)
-                    card(.gpu, "GPU", String(format: "%.0f%%", hub.gpu.usage * 100), .purple, history: hub.gpu.history)
+                    card(.gpu, "GPU", hub.gpu.available ? String(format: "%.0f%%", hub.gpu.usage * 100) : "—", .purple, history: hub.gpu.history)
                     card(.memory, "メモリ", String(format: "%.1f GB", hub.system.memoryUsedGB),
                          hub.system.pressureLevel >= 2 ? .orange : .cyan, history: hub.system.memoryHistory,
                          sub: String(format: "/ %.0f GB", hub.system.memoryTotalGB))
-                    card(.network, "ネットワーク", SystemStatsService.rate(hub.system.down), .blue, history: hub.system.netHistory,
-                         sub: "↑ " + SystemStatsService.rate(hub.system.up), scaled: true)
+                    card(.network, "ネットワーク", Fmt.rate(hub.system.down), .blue, history: hub.system.netHistory,
+                         sub: "↑ " + Fmt.rate(hub.system.up), scaled: true)
                     let disk = hub.health.diskLevel
-                    card(.storage, "ストレージ", String(format: "%.0f GB", hub.system.diskFree),
+                    let diskTotal = hub.system.diskTotal
+                    card(.storage, "ストレージ", diskTotal > 0 ? Fmt.storage(hub.system.diskFree) : "—",
                          disk == .good ? .indigo : Color(nsColor: disk.color), history: nil,
-                         sub: loc("空き / %.0f GB", hub.system.diskTotal),
-                         progress: hub.system.diskTotal > 0 ? 1 - hub.system.diskFree / hub.system.diskTotal : 0)
+                         sub: diskTotal > 0 ? loc("空き / %@", Fmt.storage(diskTotal)) : "",
+                         progress: diskTotal > 0 ? 1 - hub.system.diskFree / diskTotal : 0)
                     if hub.battery.hasBattery {
-                        card(.battery, "バッテリー", "\(Int(hub.battery.level * 100))%", hub.battery.level < 0.2 ? .red : .green, history: nil,
+                        card(.battery, "バッテリー", "\(Fmt.percent(hub.battery.level))%", hub.battery.level < 0.2 ? .red : .green, history: nil,
                              sub: hub.battery.healthPercent.map { loc("最大容量 %d%%", $0) } ?? (hub.battery.charging ? loc("充電中") : ""),
                              progress: hub.battery.level)
                     }
@@ -441,7 +454,8 @@ struct OverviewDetail: View {
                     ForEach(checks) { c in
                         HStack(spacing: 7) {
                             Circle().fill(Color(nsColor: c.level.color)).frame(width: 7, height: 7)
-                            Text(c.title).font(.system(size: 11.5))
+                            // 項目名が折り返すと行の高さが変わってパネルが伸び縮みするため 1 行に固定し、値の側を先に省略する
+                            Text(c.title).font(.system(size: 11.5)).lineLimit(1).layoutPriority(1)
                             Spacer(minLength: 4)
                             Text(c.detail).font(.system(size: 10.5, design: .rounded)).monospacedDigit()
                                 .foregroundStyle(.secondary).lineLimit(1)
@@ -460,6 +474,7 @@ struct OverviewDetail: View {
                                 Text(loc("%@（%@）", d.name, loc(d.kind))).font(.system(size: 11.5)).lineLimit(1)
                                 Spacer(minLength: 4)
                                 Text("\(d.level)%").font(.system(size: 11.5, weight: .medium, design: .rounded))
+                                    .monospacedDigit().fixedSize()
                                     .foregroundStyle(d.level <= 20 ? .red : .primary)
                             }
                         }
@@ -484,7 +499,7 @@ struct OverviewDetail: View {
             Text(loc(title)).font(.system(size: 10, weight: .semibold)).foregroundStyle(selected ? color : .secondary)
             Text(value).font(.system(size: 17, weight: .semibold, design: .rounded)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
             if let sub, !sub.isEmpty {
-                Text(sub).font(.system(size: 9.5)).foregroundStyle(.secondary).lineLimit(1)
+                Text(sub).font(.system(size: 9.5)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
             }
             Spacer(minLength: 0)
             if let history {
@@ -561,7 +576,7 @@ private struct OverviewInspector: View {
                       trailing: loc("プレッシャー %@", p >= 4 ? loc("逼迫") : p >= 2 ? loc("注意") : loc("正常")), rows: rows, limit: 7,
                       empty: "集計できませんでした",
                       note: "メモリフットプリント（他のユーザーのプロセスを除く）",
-                      format: { Self.bytes($0) }, warn: { $0 > 4_000_000_000 })
+                      format: { Fmt.memory($0) }, warn: { $0 > 4_000_000_000 })
         case .battery:
             let b = hub.battery
             UsageList(title: "エネルギー使用量", symbol: "bolt.fill", color: .yellow,
@@ -582,12 +597,9 @@ private struct OverviewInspector: View {
         return parts.count == 2 ? loc("%@・%@", parts[0], parts[1]) : parts.joined()
     }
 
-    static func bytes(_ b: Double) -> String {
-        b >= 1_073_741_824 ? String(format: "%.1f GB", b / 1_073_741_824) : String(format: "%.0f MB", b / 1_048_576)
-    }
-
     static func power(_ w: Double) -> String {
-        w >= 1 ? String(format: "%.1f W", w) : String(format: "%.0f mW", max(w * 1000, 1))
+        // 0.9996 W が「1000 mW」にならないよう、丸めたあとの値で単位を決める
+        w >= 0.9995 ? String(format: "%.1f W", w) : String(format: "%.0f mW", max(w * 1000, 1))
     }
 }
 
@@ -644,7 +656,7 @@ private struct UsageList: View {
             }
             if let note, showHeader {
                 Spacer(minLength: 0)
-                Text(loc(note)).font(.system(size: 9)).foregroundStyle(.tertiary).lineLimit(1)
+                Text(loc(note)).font(.system(size: 9)).foregroundStyle(.tertiary).lineLimit(1).minimumScaleFactor(0.8)
             }
         }
         .animation(.smooth(duration: 0.4), value: rows)
@@ -674,6 +686,7 @@ private struct UsageRowView: View {
                 .font(.system(size: 11.5, weight: .medium, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(warn ? .orange : .primary)
+                .fixedSize()
                 .contentTransition(.numericText())
         }
         .padding(.horizontal, 5)
@@ -711,14 +724,14 @@ private struct NetworkInspector: View {
                     Image(systemName: i.symbol).font(.system(size: 12)).foregroundStyle(.secondary).frame(width: 18)
                     VStack(alignment: .leading, spacing: 0) {
                         Text(i.name).font(.system(size: 11.5)).lineLimit(1)
-                        Text(i.address).font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
+                        Text(i.address).font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary).lineLimit(1)
                     }
                     Spacer(minLength: 4)
                     VStack(alignment: .trailing, spacing: 0) {
-                        Text("↓ " + SystemStatsService.rate(i.down))
-                        Text("↑ " + SystemStatsService.rate(i.up))
+                        Text("↓ " + Fmt.rate(i.down))
+                        Text("↑ " + Fmt.rate(i.up))
                     }
-                    .font(.system(size: 10, design: .rounded)).monospacedDigit().foregroundStyle(.secondary)
+                    .font(.system(size: 10, design: .rounded)).monospacedDigit().foregroundStyle(.secondary).fixedSize()
                 }
             }
             if detail.interfaces.isEmpty {
@@ -730,8 +743,8 @@ private struct NetworkInspector: View {
     private func legend(_ symbol: String, _ color: Color, _ value: Double) -> some View {
         HStack(spacing: 4) {
             Image(systemName: symbol).font(.system(size: 10, weight: .bold)).foregroundStyle(color)
-            Text(SystemStatsService.rate(value))
-                .font(.system(size: 13, weight: .semibold, design: .rounded)).monospacedDigit()
+            Text(Fmt.rate(value))
+                .font(.system(size: 13, weight: .semibold, design: .rounded)).monospacedDigit().lineLimit(1)
                 .contentTransition(.numericText())
         }
     }
@@ -750,8 +763,9 @@ private struct StorageInspector: View {
                         Image(systemName: v.symbol).font(.system(size: 11)).foregroundStyle(.secondary).frame(width: 16)
                         Text(v.name).font(.system(size: 11.5)).lineLimit(1)
                         Spacer(minLength: 4)
-                        Text(loc("%@ 空き / %@", Self.size(v.free), Self.size(v.total)))
+                        Text(loc("%@ 空き / %@", Fmt.storage(v.free), Fmt.storage(v.total)))
                             .font(.system(size: 10, design: .rounded)).monospacedDigit().foregroundStyle(.secondary)
+                            .lineLimit(1).layoutPriority(1)
                     }
                     let used = v.total > 0 ? 1 - v.free / v.total : 0
                     Capsule().fill(.primary.opacity(0.1)).frame(height: 5)
@@ -766,20 +780,16 @@ private struct StorageInspector: View {
                 Text("確認中…").font(.system(size: 11)).foregroundStyle(.secondary)
             }
             HStack(spacing: 12) {
-                Label(SystemStatsService.rate(detail.diskRead), systemImage: "arrow.down.doc")
-                Label(SystemStatsService.rate(detail.diskWrite), systemImage: "square.and.arrow.down")
+                Label(Fmt.rate(detail.diskRead), systemImage: "arrow.down.doc")
+                Label(Fmt.rate(detail.diskWrite), systemImage: "square.and.arrow.down")
             }
-            .font(.system(size: 10.5, design: .rounded)).monospacedDigit().foregroundStyle(.secondary)
+            .font(.system(size: 10.5, design: .rounded)).monospacedDigit().foregroundStyle(.secondary).lineLimit(1)
             .padding(.top, 2)
             Divider().padding(.vertical, 1)
             Text("ディスクを読み書きしているアプリ").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
             UsageList(title: "", symbol: "", color: .indigo, rows: rows, limit: 3,
                       empty: "読み書きしているアプリはありません",
-                      format: { SystemStatsService.rate($0) }, warn: { $0 > 100_000_000 }, showHeader: false)
+                      format: { Fmt.rate($0) }, warn: { $0 > 100_000_000 }, showHeader: false)
         }
-    }
-
-    static func size(_ gb: Double) -> String {
-        gb >= 1000 ? String(format: "%.1f TB", gb / 1000) : String(format: "%.0f GB", gb)
     }
 }

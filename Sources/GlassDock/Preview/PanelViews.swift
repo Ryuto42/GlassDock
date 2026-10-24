@@ -17,7 +17,7 @@ struct PanelHeader: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(loc(title)).font(.system(size: 14, weight: .semibold)).lineLimit(1)
                 if let subtitle {
-                    Text(loc(subtitle)).font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text(loc(subtitle)).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
             Spacer(minLength: 0)
@@ -52,7 +52,6 @@ struct ActionTile: View {
     let symbol: String
     let title: String
     var destructive = false
-    var active = false
     let action: () -> Void
     @State private var hovering = false
 
@@ -66,12 +65,12 @@ struct ActionTile: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
         }
-        .foregroundStyle(destructive ? AnyShapeStyle(.red) : active ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+        .foregroundStyle(destructive ? AnyShapeStyle(.red) : AnyShapeStyle(.primary))
         .frame(maxWidth: .infinity)
         .padding(.vertical, 9)
         .background {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(active ? AnyShapeStyle(Color.accentColor.gradient) : AnyShapeStyle(.primary.opacity(hovering ? 0.14 : 0.07)))
+                .fill(.primary.opacity(hovering ? 0.14 : 0.07))
         }
         .scaleEffect(hovering ? 1.03 : 1)
         .contentShape(RoundedRectangle(cornerRadius: 12))
@@ -85,6 +84,7 @@ struct MenuRow: View {
     let title: String
     var detail: String?
     var destructive = false
+    var titleLines = 1
     let action: () -> Void
     @State private var hovering = false
 
@@ -94,7 +94,7 @@ struct MenuRow: View {
                 Image(systemName: symbol).font(.system(size: 12)).frame(width: 16)
                     .foregroundStyle(hovering ? .white : destructive ? .red : .secondary)
             }
-            Text(loc(title)).font(.system(size: 12.5)).lineLimit(1).truncationMode(.middle)
+            Text(loc(title)).font(.system(size: 12.5)).lineLimit(titleLines).truncationMode(.middle)
                 .foregroundStyle(hovering ? .white : destructive ? .red : .primary)
             Spacer(minLength: 6)
             if let detail {
@@ -107,6 +107,88 @@ struct MenuRow: View {
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture(perform: action)
+    }
+}
+
+// 表示用と大きさを測る用（PreviewRootView の非表示コピー）の 2 つで値が食い違うとガラスの大きさが中身と合わなくなるため、
+// 高さが変わる一時的な状態と、開くたびに 1 回だけ読み込むものはコピーごとの @State ではなくここに置く
+@Observable
+final class PanelSession {
+    var confirmForceQuit = false
+    var trashConfirming = false
+    var trashCount: Int?
+    var controlQuery = ""
+    var controlPage = 0
+    var presetNaming = false
+    var presetName = ""
+    var devices: [AudioDevice] = []
+    var output: AudioObjectID = 0
+    var windowCounts: [pid_t: Int]?
+    @ObservationIgnored private var generation = 0
+    @ObservationIgnored private var trashLoading = false
+    @ObservationIgnored private var controlLoaded = false
+
+    func reset() {
+        generation += 1
+        trashLoading = false
+        controlLoaded = false
+        confirmForceQuit = false
+        trashConfirming = false
+        trashCount = nil
+        controlQuery = ""
+        controlPage = 0
+        presetNaming = false
+        presetName = ""
+        devices = []
+        output = 0
+        windowCounts = nil
+    }
+
+    func loadTrashCount() {
+        guard !trashLoading else { return }
+        trashLoading = true
+        let gen = generation
+        Task {
+            let count = await AppActions.trashCount()
+            guard gen == generation else { return }
+            trashCount = count
+        }
+    }
+
+    // ウィンドウ数は応答しないアプリで待たされないよう、メインスレッドの外でまとめて数える
+    func prepareControlCenter(pids: [pid_t]) {
+        guard !controlLoaded else { return }
+        controlLoaded = true
+        devices = AudioDevices.outputs()
+        output = AudioDevices.defaultOutput
+        WidgetHub.shared.volume.refresh()
+        let gen = generation
+        Task {
+            let counts = await Task.detached(priority: .userInitiated) { WindowSwitcher.windowCounts(pids) }.value
+            guard gen == generation else { return }
+            windowCounts = counts
+        }
+    }
+}
+
+private func appDisplayName(_ url: URL) -> String {
+    FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: "")
+}
+
+private struct TileGrid<Content: View>: View {
+    let columns: Int
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: columns), spacing: 6) { content }
+    }
+}
+
+private struct MenuSectionLabel: View {
+    let title: LocalizedStringKey
+
+    var body: some View {
+        Text(title).font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary).padding(.horizontal, 8)
     }
 }
 
@@ -132,7 +214,6 @@ struct ContextMenuPanel: View {
     let item: DockItem
     let state: PreviewState
     @Environment(DockModel.self) private var model
-    @State private var confirmForceQuit = false
     private let controller = PreviewController.shared
 
     var body: some View {
@@ -140,11 +221,19 @@ struct ContextMenuPanel: View {
         VStack(alignment: .leading, spacing: 10) {
             PanelHeader(icon: icon, title: item.name, subtitle: subtitle)
             if !state.dockMenu.isEmpty, case .app(let url) = item.kind {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(state.dockMenu, id: \.self) { title in
+                // 最近使った書類などで項目が多いアプリでは、パネルが画面からはみ出さないようスクロールさせる
+                let rows = VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(state.dockMenu.enumerated()), id: \.offset) { _, title in
                         MenuRow(symbol: Self.symbol(for: title), title: title) {
                             run { AppActions.pressDockMenuItem(for: url, title: title) }
                         }
+                    }
+                }
+                Group {
+                    if state.dockMenu.count > 8 {
+                        ScrollView { rows }.frame(maxHeight: 8 * 27)
+                    } else {
+                        rows
                     }
                 }
                 .padding(4)
@@ -178,6 +267,7 @@ struct ContextMenuPanel: View {
             if item.runningApp != nil {
                 return state.windows.isEmpty ? "実行中" : loc("実行中・ウィンドウ %d", state.windows.count)
             }
+            if item.isLingering { return "バックグラウンドで実行中" }
             return item.isPinned ? "Dock に固定" : nil
         case .folder: return "フォルダ"
         case .trash: return "ゴミ箱"
@@ -189,7 +279,7 @@ struct ContextMenuPanel: View {
     @ViewBuilder private func windowList(_ app: NSRunningApplication) -> some View {
         if !state.windows.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
-                Text("ウィンドウ").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary).padding(.horizontal, 8).padding(.bottom, 2)
+                MenuSectionLabel(title: "ウィンドウ").padding(.bottom, 2)
                 ForEach(state.windows.prefix(6)) { w in
                     MenuRow(symbol: w.isMinimized ? "minus.square" : "macwindow",
                             title: w.title.isEmpty ? loc("名称未設定") : w.title,
@@ -202,7 +292,7 @@ struct ContextMenuPanel: View {
     }
 
     private func actionGrid(_ app: NSRunningApplication) -> some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
+        TileGrid(columns: 3) {
             ActionTile(symbol: "plus.rectangle.on.rectangle", title: "新規ウインドウ") { run { AppActions.newWindow(app) } }
             ActionTile(symbol: "minus.rectangle", title: "すべて最小化") { run { WindowService.shared.minimizeAll(pid: app.processIdentifier) } }
             ActionTile(symbol: "xmark.rectangle", title: "すべて閉じる") { run { AppActions.closeAll(app) } }
@@ -222,13 +312,13 @@ struct ContextMenuPanel: View {
             .prefix(8)
         VStack(alignment: .leading, spacing: 0) {
             if !windows.isEmpty {
-                Text("ウィンドウ").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary).padding(.horizontal, 8)
+                MenuSectionLabel(title: "ウィンドウ")
                 ForEach(Array(windows)) { w in
                     MenuRow(symbol: "macwindow", title: w.title) { controller.focus(w) }
                 }
             }
             if !commands.isEmpty {
-                Text("メニュー").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary).padding(.horizontal, 8).padding(.top, 4)
+                MenuSectionLabel(title: "メニュー").padding(.top, 4)
                 ForEach(Array(commands)) { c in
                     MenuRow(symbol: "filemenu.and.selection", title: c.title, detail: c.shortcut.isEmpty ? c.path : c.shortcut) {
                         run {
@@ -248,19 +338,19 @@ struct ContextMenuPanel: View {
     @ViewBuilder private var staticActions: some View {
         switch item.kind {
         case .app:
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 2), spacing: 6) {
+            TileGrid(columns: 2) {
                 ActionTile(symbol: "arrow.up.forward.app", title: "開く") { run { model.activate(item) } }
-                ActionTile(symbol: "folder", title: "Finder に表示") { run { reveal() } }
+                ActionTile(symbol: "folder", title: loc("%@ に表示", FileViewer.name)) { run { reveal() } }
             }
         case .folder(let url):
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 2), spacing: 6) {
-                ActionTile(symbol: "folder", title: "開く") { run { NSWorkspace.shared.open(url) } }
-                ActionTile(symbol: "magnifyingglass", title: "Finder に表示") { run { reveal() } }
+            TileGrid(columns: 2) {
+                ActionTile(symbol: "folder", title: "開く") { run { FileViewer.open(url) } }
+                ActionTile(symbol: "magnifyingglass", title: loc("%@ に表示", FileViewer.name)) { run { reveal() } }
             }
         case .trash:
             TrashActions()
         case .widget(let kind):
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 2), spacing: 6) {
+            TileGrid(columns: 2) {
                 ActionTile(symbol: model.leadingWidgets.contains(kind) ? "arrow.right.to.line" : "arrow.left.to.line",
                            title: model.leadingWidgets.contains(kind) ? "右端へ移動" : "左端へ移動") {
                     run { model.setWidget(kind, leading: !model.leadingWidgets.contains(kind)) }
@@ -276,7 +366,7 @@ struct ContextMenuPanel: View {
         VStack(alignment: .leading, spacing: 0) {
             if case .app(let url) = item.kind {
                 if item.runningApp != nil {
-                    MenuRow(symbol: "magnifyingglass", title: "Finder に表示") { run { reveal() } }
+                    MenuRow(symbol: "magnifyingglass", title: loc("%@ に表示", FileViewer.name)) { run { reveal() } }
                 }
                 if url != DockModel.finderURL {
                     if item.isPinned {
@@ -298,11 +388,18 @@ struct ContextMenuPanel: View {
                     MenuRow(symbol: "arrow.uturn.backward", title: "アイコンを元に戻す") { run { model.setCustomIcon(nil, for: item) } }
                 }
             }
-            if let app = item.runningApp, item.url != DockModel.finderURL {
+            if item.runningApp != nil || item.isLingering, item.url != DockModel.finderURL {
                 // 未保存のデータが消えるため、もう一度押したときだけ実行する
-                MenuRow(symbol: "exclamationmark.octagon", title: confirmForceQuit ? "もう一度押すと強制終了（未保存の内容は失われます）" : "強制終了",
-                        destructive: true) {
-                    if confirmForceQuit { run { app.forceTerminate() } } else { withAnimation(.spring(duration: 0.2)) { confirmForceQuit = true } }
+                let session = controller.session
+                MenuRow(symbol: "exclamationmark.octagon", title: session.confirmForceQuit ? "もう一度押すと強制終了（未保存の内容は失われます）" : "強制終了",
+                        destructive: true, titleLines: 2) {
+                    if session.confirmForceQuit {
+                        run {
+                            if let app = item.runningApp { app.forceTerminate() } else { model.forceQuitLingering(item) }
+                        }
+                    } else {
+                        withAnimation(.spring(duration: 0.2)) { session.confirmForceQuit = true }
+                    }
                 }
             }
             MenuRow(symbol: "gearshape", title: "Dock 設定…") { run { SettingsWindowController.shared.show() } }
@@ -310,7 +407,7 @@ struct ContextMenuPanel: View {
     }
 
     private func reveal() {
-        if let url = item.url { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+        if let url = item.url { FileViewer.reveal(url) }
     }
 
     static func symbol(for title: String) -> String {
@@ -334,15 +431,16 @@ struct ContextMenuPanel: View {
 // MARK: - Trash
 
 struct TrashActions: View {
-    @State private var count: Int?
-    @State private var confirming = false
     @State private var emptying = false
+    private let session = PreviewController.shared.session
 
     var body: some View {
+        let count = session.trashCount
+        let confirming = session.trashConfirming
         VStack(alignment: .leading, spacing: 8) {
             Text(count.map { $0 == 0 ? loc("ゴミ箱は空です") : loc("%d 項目", $0) } ?? loc("確認中…"))
                 .font(.system(size: 12)).foregroundStyle(.secondary)
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 2), spacing: 6) {
+            TileGrid(columns: 2) {
                 ActionTile(symbol: "trash", title: "開く") {
                     PreviewController.shared.hide(animated: true)
                     if let url = DockItem.trash.url { NSWorkspace.shared.open(url) }
@@ -355,13 +453,13 @@ struct TrashActions: View {
                         emptying = true
                         Task {
                             await AppActions.emptyTrash()
-                            count = await AppActions.trashCount()
+                            session.trashCount = await AppActions.trashCount()
                             emptying = false
-                            confirming = false
+                            session.trashConfirming = false
                             DockModel.shared.invalidateIcons()
                         }
                     } else {
-                        withAnimation(.spring(duration: 0.25)) { confirming = true }
+                        withAnimation(.spring(duration: 0.25)) { session.trashConfirming = true }
                     }
                 }
                 .opacity((count ?? 0) > 0 ? 1 : 0.4)
@@ -372,7 +470,7 @@ struct TrashActions: View {
                     .transition(.opacity)
             }
         }
-        .task { count = await AppActions.trashCount() }
+        .onAppear { session.loadTrashCount() }
     }
 }
 
@@ -394,20 +492,25 @@ struct TrashPanel: View {
 final class ThumbnailCache {
     static let shared = ThumbnailCache()
     private var images: [String: NSImage] = [:]
+    // 先読みと 2 つのコピーの各タイルから同じファイルを同時に頼まれるため、作成中のものは使い回す
+    private var pending: [String: Task<NSImage, Never>] = [:]
 
     func image(for url: URL) -> NSImage? { images[url.path] }
 
     func load(_ url: URL, size: CGFloat) async -> NSImage {
-        if let img = images[url.path] { return img }
-        let request = QLThumbnailGenerator.Request(fileAt: url, size: CGSize(width: size, height: size), scale: 2, representationTypes: .thumbnail)
-        let img: NSImage
-        if let rep = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request) {
-            img = rep.nsImage
-        } else {
-            img = NSWorkspace.shared.icon(forFile: url.resolvingSymlinksInPath().path)
+        let key = url.path
+        if let img = images[key] { return img }
+        if let task = pending[key] { return await task.value }
+        let task = Task {
+            let request = QLThumbnailGenerator.Request(fileAt: url, size: CGSize(width: size, height: size), scale: 2, representationTypes: .thumbnail)
+            if let rep = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { return rep.nsImage }
+            return NSWorkspace.shared.icon(forFile: url.resolvingSymlinksInPath().path)
         }
-        images[url.path] = img
-        if images.count > 200 { images.removeAll() }
+        pending[key] = task
+        let img = await task.value
+        pending[key] = nil
+        if images.count >= 200 { images.removeAll() }
+        images[key] = img
         return img
     }
 }
@@ -421,13 +524,16 @@ struct FolderEntry: Identifiable, Equatable {
     static func load(_ folder: URL, limit: Int = 12) -> (entries: [FolderEntry], total: Int) {
         let keys: [URLResourceKey] = [.addedToDirectoryDateKey, .contentModificationDateKey]
         let urls = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles])) ?? []
-        let entries = urls.map { u in
+        let dated = urls.map { u in
             let v = try? u.resourceValues(forKeys: Set(keys))
-            return FolderEntry(url: u, name: FileManager.default.displayName(atPath: u.path),
-                               date: v?.addedToDirectoryDate ?? v?.contentModificationDate ?? .distantPast)
+            return (url: u, date: v?.addedToDirectoryDate ?? v?.contentModificationDate ?? .distantPast)
         }
         .sorted { $0.date > $1.date }
-        return (Array(entries.prefix(limit)), urls.count)
+        // 表示名の取得は重いので、表示する分だけにする（ファイルが多いフォルダでホバーが重くならないように）
+        let entries = dated.prefix(limit).map {
+            FolderEntry(url: $0.url, name: FileManager.default.displayName(atPath: $0.url.path), date: $0.date)
+        }
+        return (entries, urls.count)
     }
 }
 
@@ -441,13 +547,15 @@ struct FolderStackPanel: View {
                 PanelHeader(icon: NSWorkspace.shared.icon(forFile: folder.path),
                             title: FileManager.default.displayName(atPath: folder.path),
                             subtitle: loc("%d 項目・新しい順", state.folderTotal))
-                Text("Finder で開く")
+                Text(loc("%@ で開く", FileViewer.name))
                     .font(.system(size: 11, weight: .medium))
+                    .lineLimit(1)
+                    .fixedSize()
                     .padding(.horizontal, 10).padding(.vertical, 5)
                     .background(Capsule().fill(.primary.opacity(0.08)))
                     .onTapGesture {
                         PreviewController.shared.hide(animated: true)
-                        NSWorkspace.shared.open(folder)
+                        FileViewer.open(folder)
                     }
             }
             if state.folderEntries.isEmpty {
@@ -491,6 +599,7 @@ private struct FileTile: View {
             Text(entry.name)
                 .font(.system(size: 10, weight: .medium))
                 .lineLimit(2)
+                .truncationMode(.middle)
                 .multilineTextAlignment(.center)
                 .frame(height: 26, alignment: .top)
             Text(entry.date, format: .relative(presentation: .named))
@@ -505,7 +614,7 @@ private struct FileTile: View {
         .onHover { hovering = $0 }
         .onTapGesture {
             PreviewController.shared.hide(animated: true)
-            NSWorkspace.shared.open(entry.url)
+            FileViewer.openItem(entry.url)
         }
         .draggable(entry.url)
         .help(entry.name)
@@ -562,7 +671,7 @@ struct MusicPanel: View {
             }
 
             VStack(spacing: 3) {
-                ProgressTrack(value: active && media.duration > 0 ? position / media.duration : 0) { fraction, done in
+                ProgressTrack(value: active && media.duration > 0 && position.isFinite ? position / media.duration : 0) { fraction, done in
                     guard active, media.duration > 0 else { return }
                     scrub = fraction * media.duration
                     if done, let s = scrub {
@@ -588,12 +697,13 @@ struct MusicPanel: View {
                 Spacer()
                 HStack(spacing: 15) {
                     PlayerButton(symbol: "backward.fill", size: 14) { media.send(.previous, app: appName) }
-                    PlayerButton(symbol: "gobackward.10", size: 16) { media.seek(to: max(position - 10, 0)) }
+                    // 別のプレーヤーが再生中のときに、そちらを動かさないようにする
+                    PlayerButton(symbol: "gobackward.10", size: 16) { if active { media.seek(to: max(position - 10, 0)) } }
                     PlayerButton(symbol: active && media.isPlaying ? "pause.fill" : "play.fill", size: 21) {
                         media.send(.playPause, app: appName)
                     }
                     .frame(width: 22)
-                    PlayerButton(symbol: "goforward.10", size: 16) { media.seek(to: min(position + 10, media.duration)) }
+                    PlayerButton(symbol: "goforward.10", size: 16) { if active { media.seek(to: min(position + 10, media.duration)) } }
                     PlayerButton(symbol: "forward.fill", size: 14) { media.send(.next, app: appName) }
                 }
                 Spacer()
@@ -612,7 +722,9 @@ struct MusicPanel: View {
     }
 
     static func time(_ s: Double) -> String {
+        guard s.isFinite else { return "0:00" }
         let t = Int(max(s, 0).rounded())
+        if t >= 3600 { return String(format: "%d:%02d:%02d", t / 3600, t / 60 % 60, t % 60) }
         return String(format: "%d:%02d", t / 60, t % 60)
     }
 }
@@ -649,6 +761,7 @@ struct ProgressTrack: View {
 
     var body: some View {
         GeometryReader { geo in
+            let width = max(geo.size.width, 1)
             ZStack(alignment: .leading) {
                 Capsule().fill(.primary.opacity(0.18))
                 Capsule().fill(.primary.opacity(0.9))
@@ -659,8 +772,8 @@ struct ProgressTrack: View {
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
-                    .onChanged { onScrub(min(max($0.location.x / geo.size.width, 0), 1), false) }
-                    .onEnded { onScrub(min(max($0.location.x / geo.size.width, 0), 1), true) }
+                    .onChanged { onScrub(min(max($0.location.x / width, 0), 1), false) }
+                    .onEnded { onScrub(min(max($0.location.x / width, 0), 1), true) }
             )
             .onHover { h in withAnimation(.spring(duration: 0.2)) { hovering = h } }
         }
@@ -673,16 +786,10 @@ struct ProgressTrack: View {
 struct ControlCenterPanel: View {
     @Environment(DockSettings.self) private var settings
     @Environment(DockModel.self) private var model
-    @State private var query = ""
-    @State private var devices: [AudioDevice] = []
-    @State private var output: AudioObjectID = 0
-    @State private var page = 0
+    @Bindable private var session = PreviewController.shared.session
     @State private var presets = SettingsPresets.shared
-    @State private var naming = false
-    @State private var newName = ""
     @State private var hint: String?
     @FocusState private var nameFocused: Bool
-    @State private var windowCounts: [pid_t: Int] = [:]
     @State private var dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
 
     private let perPage = 13
@@ -692,24 +799,17 @@ struct ControlCenterPanel: View {
             leftColumn.frame(width: 272)
             rightColumn.frame(width: 252)
         }
-        .onAppear {
-            devices = AudioDevices.outputs()
-            output = AudioDevices.defaultOutput
-            WidgetHub.shared.volume.refresh()
-            windowCounts = Dictionary(uniqueKeysWithValues: running.map { app in
-                (app.processIdentifier, WindowService.shared.axWindows(pid: app.processIdentifier).count)
-            })
-        }
+        .onAppear { session.prepareControlCenter(pids: running.map(\.processIdentifier)) }
     }
 
     // MARK: Left
 
     private var leftColumn: some View {
         VStack(alignment: .leading, spacing: 12) {
-            SearchField(prompt: "検索", text: $query) {
-                if let first = AppActions.searchApps(query).first { launch(first) }
+            SearchField(prompt: "検索", text: $session.controlQuery) {
+                if let first = AppActions.searchApps(session.controlQuery).first { launch(first) }
             }
-            if query.isEmpty {
+            if session.controlQuery.isEmpty {
                 section("固定")
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 4), spacing: 10) {
                     ForEach(pinned, id: \.self) { url in
@@ -721,12 +821,12 @@ struct ControlCenterPanel: View {
                 }
             } else {
                 section("検索結果")
-                let results = AppActions.searchApps(query)
+                let results = AppActions.searchApps(session.controlQuery)
                 VStack(spacing: 0) {
                     ForEach(results, id: \.self) { url in
                         HStack(spacing: 8) {
                             Image(nsImage: NSWorkspace.shared.icon(forFile: url.resolvingSymlinksInPath().path)).resizable().frame(width: 22, height: 22)
-                            MenuRow(symbol: nil, title: displayName(url)) { launch(url) }
+                            MenuRow(symbol: nil, title: appDisplayName(url)) { launch(url) }
                             PinButton(pinned: isPinned(url)) { withAnimation(.smooth) { togglePin(url) } }
                         }
                     }
@@ -818,9 +918,9 @@ struct ControlCenterPanel: View {
                 rows.padding(4)
             }
             Divider().opacity(0.4).padding(.horizontal, 12)
-            if naming {
+            if session.presetNaming {
                 HStack(spacing: 8) {
-                    TextField("名前", text: $newName)
+                    TextField("名前", text: $session.presetName)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12.5))
                         .focused($nameFocused)
@@ -830,7 +930,7 @@ struct ControlCenterPanel: View {
                         .onTapGesture(perform: saveNew)
                     Image(systemName: "xmark.circle.fill").font(.system(size: 15))
                         .foregroundStyle(.tertiary)
-                        .onTapGesture { withAnimation(.smooth(duration: 0.25)) { naming = false } }
+                        .onTapGesture { withAnimation(.smooth(duration: 0.25)) { session.presetNaming = false } }
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
@@ -845,8 +945,8 @@ struct ControlCenterPanel: View {
                 .padding(.vertical, 10)
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    newName = presets.defaultName()
-                    withAnimation(.smooth(duration: 0.25)) { naming = true }
+                    session.presetName = presets.defaultName()
+                    withAnimation(.smooth(duration: 0.25)) { session.presetNaming = true }
                     DispatchQueue.main.async { nameFocused = true }
                 }
                 .transition(.opacity)
@@ -856,10 +956,10 @@ struct ControlCenterPanel: View {
     }
 
     private func saveNew() {
-        let name = newName.trimmingCharacters(in: .whitespaces)
+        let name = session.presetName.trimmingCharacters(in: .whitespaces)
         withAnimation(.smooth(duration: 0.3)) {
             presets.saveCurrent(name: name.isEmpty ? presets.defaultName() : name)
-            naming = false
+            session.presetNaming = false
         }
     }
 
@@ -880,20 +980,20 @@ struct ControlCenterPanel: View {
             .padding(.vertical, 10)
             Divider().opacity(0.4).padding(.horizontal, 12)
             Menu {
-                ForEach(devices) { d in
+                ForEach(session.devices) { d in
                     Button {
-                        output = d.id
+                        session.output = d.id
                         AudioDevices.setDefaultOutput(d.id)
                         volume.setActive(false)
                         volume.setActive(true)
                     } label: {
-                        if d.id == output { Label(d.name, systemImage: "checkmark") } else { Text(d.name) }
+                        if d.id == session.output { Label(d.name, systemImage: "checkmark") } else { Text(d.name) }
                     }
                 }
             } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "speaker.wave.2").font(.system(size: 12)).frame(width: 18)
-                    Text(devices.first { $0.id == output }?.name ?? loc("出力")).font(.system(size: 12.5)).lineLimit(1)
+                    Text(session.devices.first { $0.id == session.output }?.name ?? loc("出力")).font(.system(size: 12.5)).lineLimit(1)
                     Spacer()
                     Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(.tertiary)
                 }
@@ -918,13 +1018,13 @@ struct ControlCenterPanel: View {
     private var rightColumn: some View {
         let apps = running
         let pages = max(1, Int(ceil(Double(apps.count) / Double(perPage))))
-        let current = min(page, pages - 1)
+        let current = min(session.controlPage, pages - 1)
         let slice = Array(apps.dropFirst(current * perPage).prefix(perPage))
         return VStack(alignment: .leading, spacing: 8) {
             section(loc("起動中 - %d", apps.count))
             VStack(spacing: 2) {
                 ForEach(slice, id: \.processIdentifier) { app in
-                    RunningRow(app: app, windows: windowCounts[app.processIdentifier] ?? 0,
+                    RunningRow(app: app, windows: session.windowCounts.map { $0[app.processIdentifier] ?? 0 },
                                frontmost: app.isActive,
                                pinned: app.bundleURL.map(isPinned),
                                onPin: { if let url = app.bundleURL { withAnimation(.smooth) { togglePin(url) } } }) {
@@ -942,13 +1042,13 @@ struct ControlCenterPanel: View {
                     Spacer()
                     Image(systemName: "chevron.left").font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(current > 0 ? .primary : .tertiary)
-                        .onTapGesture { withAnimation(.smooth) { page = max(current - 1, 0) } }
+                        .onTapGesture { withAnimation(.smooth) { session.controlPage = max(current - 1, 0) } }
                     ForEach(0..<pages, id: \.self) { i in
                         Capsule().fill(.primary.opacity(i == current ? 0.8 : 0.25)).frame(width: i == current ? 14 : 5, height: 5)
                     }
                     Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(current < pages - 1 ? .primary : .tertiary)
-                        .onTapGesture { withAnimation(.smooth) { page = min(current + 1, pages - 1) } }
+                        .onTapGesture { withAnimation(.smooth) { session.controlPage = min(current + 1, pages - 1) } }
                     Spacer()
                 }
             }
@@ -988,10 +1088,6 @@ struct ControlCenterPanel: View {
 
     private func section(_ title: String) -> some View {
         Text(loc(title)).font(.system(size: 10.5, weight: .semibold)).foregroundStyle(.secondary).padding(.leading, 2)
-    }
-
-    private func displayName(_ url: URL) -> String {
-        FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: "")
     }
 
     private func launch(_ url: URL) {
@@ -1139,7 +1235,7 @@ private struct AppGridIcon: View {
                             .transition(.scale.combined(with: .opacity))
                     }
                 }
-            Text(FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: ""))
+            Text(appDisplayName(url))
                 .font(.system(size: 10, weight: .medium))
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -1153,7 +1249,7 @@ private struct AppGridIcon: View {
 
 private struct RunningRow: View {
     let app: NSRunningApplication
-    let windows: Int
+    let windows: Int?
     let frontmost: Bool
     let pinned: Bool?
     let onPin: () -> Void
@@ -1172,11 +1268,18 @@ private struct RunningRow: View {
             if let pinned, hovering || pinned {
                 PinButton(pinned: pinned, action: onPin)
             }
-            Text("\(windows)")
-                .font(.system(size: 10, weight: .semibold, design: .rounded))
-                .foregroundStyle(.secondary)
-                .frame(minWidth: 18, minHeight: 16)
-                .background(Capsule().fill(.primary.opacity(0.1)))
+            if let windows {
+                // 桁が増えても折り返さず、カプセルが数字に合わせて伸びるようにする
+                Text("\(windows)")
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .fixedSize()
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 4)
+                    .frame(minWidth: 18, minHeight: 16)
+                    .background(Capsule().fill(.primary.opacity(0.1)))
+            }
             Image(systemName: "chevron.right")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.tertiary)

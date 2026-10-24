@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -6,6 +7,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var signalSource: DispatchSourceSignal?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 二重に起動すると、あとから終了した方が標準 Dock を元に戻してしまうため、先に動いている方に任せて終わる
+        let me = ProcessInfo.processInfo.processIdentifier
+        if NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
+            .contains(where: { $0.processIdentifier != me }) {
+            exit(0)
+        }
+        // 応答しないアプリがあっても AX の問い合わせで長く止まらないよう、待ち時間の既定（約 6 秒）を短くする
+        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.5)
+
         let settings = DockSettings.shared
         if settings.hideSystemDock { SystemDock.setHidden(true) }
         // 前回クラッシュなどで元に戻せなかった場合は、ここで標準 Dock を戻す
@@ -61,7 +71,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openWidgets() { SettingsWindowController.shared.show(tab: .widgets) }
 
-    @objc private func toggleAutoHide() { DockSettings.shared.autoHide.toggle() }
+    // 専用の設定にしたディスプレイの Dock もそろえて切り替える
+    @objc private func toggleAutoHide() {
+        let on = !DockSettings.shared.autoHide
+        DockSettings.allInstances.forEach { $0.autoHide = on }
+    }
 
     @objc private func checkForUpdates() { UpdateController.shared.checkForUpdates() }
 

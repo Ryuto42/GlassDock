@@ -55,18 +55,21 @@ enum SystemDock {
         let d = UserDefaults.standard
         if hidden {
             var state = d.dictionary(forKey: savedKey) ?? [:]
+            let currents = managed.map { CFPreferencesCopyAppValue($0.key as CFString, domain) }
+            // 以前のバージョンで保存した状態に無い項目は、書き換える前の値をここで足す
+            for (i, (key, _)) in managed.enumerated() where state[key] == nil {
+                state[key] = currents[i] ?? "__none__" as CFString
+            }
+            // 途中で強制終了しても次の起動で戻せるよう、書き換える前に元の値を保存しておく
+            d.set(state, forKey: savedKey)
             var changed = false
-            for (key, make) in managed {
-                let current = CFPreferencesCopyAppValue(key as CFString, domain)
-                // 以前のバージョンで保存した状態に無い項目は、書き換える前の値をここで足す
-                if state[key] == nil { state[key] = current ?? "__none__" as CFString }
-                let value = make(current)
-                if !(current.map { CFEqual($0, value) } ?? false) {
+            for (i, (key, make)) in managed.enumerated() {
+                let value = make(currents[i])
+                if !(currents[i].map { CFEqual($0, value) } ?? false) {
                     write(key, value)
                     changed = true
                 }
             }
-            d.set(state, forKey: savedKey)
             guard changed else { return }
         } else {
             guard let state = d.dictionary(forKey: savedKey) else { return }
@@ -94,7 +97,7 @@ enum SystemDock {
     }
 
     // システム Dock の AX ツリーからバッジ（未読数など）を読む
-    static func badges() -> [String: String] {
+    nonisolated static func badges() -> [String: String] {
         guard AXIsProcessTrusted(),
               let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first
         else { return [:] }
@@ -113,7 +116,7 @@ enum SystemDock {
 }
 
 extension AXUIElement {
-    func attribute<T>(_ name: String) -> T? {
+    nonisolated func attribute<T>(_ name: String) -> T? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(self, name as CFString, &value) == .success else { return nil }
         if T.self == URL.self, let v = value, CFGetTypeID(v) == CFURLGetTypeID() {
@@ -122,16 +125,16 @@ extension AXUIElement {
         return value as? T
     }
 
-    var children: [AXUIElement] { attribute(kAXChildrenAttribute) ?? [] }
-    var role: String? { attribute(kAXRoleAttribute) }
+    nonisolated var children: [AXUIElement] { attribute(kAXChildrenAttribute) ?? [] }
+    nonisolated var role: String? { attribute(kAXRoleAttribute) }
 
     @discardableResult
-    func set(_ name: String, _ value: CFTypeRef) -> Bool {
+    nonisolated func set(_ name: String, _ value: CFTypeRef) -> Bool {
         AXUIElementSetAttributeValue(self, name as CFString, value) == .success
     }
 
     @discardableResult
-    func perform(_ action: String) -> Bool {
+    nonisolated func perform(_ action: String) -> Bool {
         AXUIElementPerformAction(self, action as CFString) == .success
     }
 }
