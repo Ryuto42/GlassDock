@@ -12,6 +12,7 @@
   "位置": "Position",
   "スタイル": "Style",
   "自動的に隠す": "Automatically Hide",
+  "MissionView を開いている間は表示": "Show While MissionView Is Open",
   "%@（未接続）": "%@ (Disconnected)",
   "対象のディスプレイ": "Target Display",
   "専用の設定にしていないすべてのディスプレイに適用されます。": "Applies to all displays that don't have their own settings.",

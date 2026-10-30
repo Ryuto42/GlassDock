@@ -34,6 +34,9 @@ struct DockMetrics {
 // ディスプレイごとの Dock が、それぞれ自分の表示状態を持つ
 @Observable
 final class DockVisibility {
+    // MissionView（自作の Mission Control）が開いている間は、自動的に隠す設定でも出したままにする
+    static var heldOpen = false
+
     @ObservationIgnored var settings: DockSettings = .shared
     var revealed = true {
         didSet { if oldValue != revealed { DockPanelController.shared.updateWidgetVisibility() } }
@@ -58,7 +61,7 @@ final class DockVisibility {
         }
         hideWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self, self.settings.autoHide, !self.hovering, !PreviewController.shared.isVisible else { return }
+            guard let self, self.settings.autoHide, !self.hovering, !(Self.heldOpen && self.settings.stayOpenInMissionView), !PreviewController.shared.isVisible else { return }
             // 端から出しただけでバーの上に来ていない、またはカーソルが止まったままの場合もここで判定する
             if self.isMouseInside() {
                 self.scheduleHide()
@@ -156,6 +159,7 @@ final class DockHoverWatcher {
     private func check() {
         guard onExit != nil, let win = window else { return }
         if barContainsMouse(in: win) {
+            BackgroundCursor.arrow()
             let p = NSEvent.mouseLocation
             onMove?(CGPoint(x: p.x - win.frame.minX, y: win.frame.maxY - p.y))
             return
@@ -231,6 +235,7 @@ struct DockRootView: View {
                         .onContinuousHover(coordinateSpace: .named("dockWindow")) { phase in
                             switch phase {
                             case .active(let p):
+                                BackgroundCursor.arrow()
                                 let bar = context.watcher.barRect
                                 let along = pos.isVertical ? (p.y >= bar.minY && p.y <= bar.maxY) : (p.x >= bar.minX && p.x <= bar.maxX)
                                 visibility.revealFromEdge(alongBar: along)
@@ -315,6 +320,7 @@ struct DockBar: View {
         .onContinuousHover(coordinateSpace: .named("dockWindow")) { phase in
             switch phase {
             case .active(let p):
+                BackgroundCursor.arrow()
                 if !hovering {
                     hovering = true
                     context.watcher.begin(onMove: { track($0, fromWatcher: true) }) { endHover() }

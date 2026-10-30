@@ -103,8 +103,10 @@ final class MinimizeTracker {
 
     nonisolated private static func scan(pid: pid_t, observer: AXObserver?) -> Scan {
         let app = AXUIElementCreateApplication(pid)
+        // プレビューなどは最小化中のウィンドウが AXDialog になるため、それも数える
         let windows: [AXUIElement] = (app.attribute(kAXWindowsAttribute) ?? []).filter {
-            ($0.attribute(kAXSubroleAttribute) as String?) == kAXStandardWindowSubrole
+            let subrole: String? = $0.attribute(kAXSubroleAttribute)
+            return subrole == kAXStandardWindowSubrole || subrole == kAXDialogSubrole
         }
         // 閉じたときにも気づけるよう、各ウィンドウの破棄通知を登録する（登録済みならエラーが返るだけ）
         if let observer {

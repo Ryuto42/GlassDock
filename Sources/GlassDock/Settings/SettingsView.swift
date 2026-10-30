@@ -349,6 +349,10 @@ private struct PlacementCard: View {
             OptionRow(title: "スタイル", selection: $s.layoutStyle)
             RowDivider()
             SwitchRow(title: "自動的に隠す", isOn: $s.autoHide)
+            if s.autoHide {
+                RowDivider()
+                SwitchRow(title: "MissionView を開いている間は表示", isOn: $s.stayOpenInMissionView)
+            }
         }
     }
 }

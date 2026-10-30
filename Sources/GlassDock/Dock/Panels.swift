@@ -31,6 +31,22 @@ final class OverlayPanel: NSPanel {
     @objc func _hasMainAppearance() -> Bool { true }
 }
 
+@_silgen_name("_CGSDefaultConnection")
+private func _CGSDefaultConnection() -> Int32
+@_silgen_name("CGSSetConnectionProperty")
+private func CGSSetConnectionProperty(_ cid: Int32, _ target: Int32, _ key: CFString, _ value: CFTypeRef) -> Int32
+
+enum BackgroundCursor {
+    // GlassDock は前面のアプリにならないため、通常は NSCursor.set() やポインタの形の指定が無視される。
+    // 下のウィンドウの縁で付いたサイズ変更のカーソルが Dock の上に残らないよう、背面からでも設定できるようにする
+    static func enable() {
+        let cid = _CGSDefaultConnection()
+        _ = CGSSetConnectionProperty(cid, cid, "SetsCursorInBackground" as CFString, kCFBooleanTrue)
+    }
+
+    static func arrow() { NSCursor.arrow.set() }
+}
+
 // 透明部分のクリックは下のウィンドウへ抜け、非アクティブでも1クリックで反応させる
 final class PassthroughHostingView: NSHostingView<AnyView> {
     required init(rootView: AnyView) {
@@ -86,6 +102,7 @@ final class DockPanelController {
     }
 
     func start() {
+        BackgroundCursor.enable()
         syncScreens()
         observers.append(NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main

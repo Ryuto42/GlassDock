@@ -98,7 +98,7 @@ final class WindowService {
             }
         } else {
             for (id, w) in ax {
-                guard w.subrole == nil || w.subrole == kAXStandardWindowSubrole else { continue }
+                guard w.subrole == nil || w.subrole == kAXStandardWindowSubrole || w.subrole == kAXDialogSubrole else { continue }
                 list.append(WindowInfo(
                     id: id, pid: pid, title: w.title ?? "",
                     frame: .zero, isMinimized: w.minimized,

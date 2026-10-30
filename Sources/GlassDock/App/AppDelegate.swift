@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         _ = DockModel.shared
         DockPanelController.shared.start()
+        observeMissionView()
         setupStatusItem()
         UpdateController.shared.start()
         WindowSwitcher.shared.start()
@@ -47,6 +48,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         SettingsWindowController.shared.show()
         return false
+    }
+
+    // 純正の Mission Control と同じく、MissionView が開いている間は Dock を画面の下に出しておく
+    private func observeMissionView() {
+        let center = DistributedNotificationCenter.default()
+        center.addObserver(forName: .init("com.ryuto.MissionView.didOpen"), object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                DockVisibility.heldOpen = true
+                DockPanelController.shared.contexts
+                    .filter { $0.settings.stayOpenInMissionView }
+                    .forEach { $0.visibility.reveal() }
+            }
+        }
+        center.addObserver(forName: .init("com.ryuto.MissionView.didClose"), object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                DockVisibility.heldOpen = false
+                DockPanelController.shared.scheduleHideAll()
+            }
+        }
     }
 
     private func setupStatusItem() {

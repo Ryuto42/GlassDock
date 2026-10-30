@@ -146,6 +146,8 @@ final class DockSettings {
     var position: DockPosition { didSet { save(position.rawValue, "position") } }
     var layoutStyle: DockLayoutStyle { didSet { save(layoutStyle.rawValue, "layoutStyle") } }
     var autoHide: Bool { didSet { save(autoHide, "autoHide") } }
+    // MissionView を開いている間は、自動的に隠す設定でも出したままにする
+    var stayOpenInMissionView: Bool { didSet { save(stayOpenInMissionView, "stayOpenInMissionView") } }
     var activeClickAction: ActiveClickAction { didSet { save(activeClickAction.rawValue, "activeClickAction") } }
     var showRunningApps: Bool { didSet { save(showRunningApps, "showRunningApps") } }
     var showBadges: Bool { didSet { save(showBadges, "showBadges") } }
@@ -222,6 +224,7 @@ final class DockSettings {
         position = option("position", DockPosition(rawValue: system.position) ?? .bottom)
         layoutStyle = option("layoutStyle", DockLayoutStyle.floating)
         autoHide = value("autoHide", false)
+        stayOpenInMissionView = value("stayOpenInMissionView", true)
         activeClickAction = option("activeClickAction", ActiveClickAction.minimize)
         showRunningApps = value("showRunningApps", true)
         showBadges = value("showBadges", true)
@@ -300,6 +303,7 @@ final class DockSettings {
     // UserDefaults に保存する項目の一覧。設定を足したらここにも加える（プリセットの保存・復元に使う）
     private static let fields: [Field] = [
         field("position", \.position), field("layoutStyle", \.layoutStyle), field("autoHide", \.autoHide),
+        field("stayOpenInMissionView", \.stayOpenInMissionView),
         field("activeClickAction", \.activeClickAction), field("showRunningApps", \.showRunningApps),
         field("showBadges", \.showBadges), field("hideSystemDock", \.hideSystemDock),
         field("animationSpeed", \.animationSpeed), field("launchBounce", \.launchBounce),
@@ -434,6 +438,7 @@ final class DockSettings {
     // 配置・外観・アイコンに関する項目だけを写す（ウィジェットやプレビューの設定は共通のまま）
     func copyAppearance(from o: DockSettings) {
         position = o.position; layoutStyle = o.layoutStyle; autoHide = o.autoHide
+        stayOpenInMissionView = o.stayOpenInMissionView
         animationSpeed = o.animationSpeed; launchBounce = o.launchBounce
         material = o.material; appearanceMode = o.appearanceMode; tintHex = o.tintHex; tintStrength = o.tintStrength
         cornerRatio = o.cornerRatio; borderWidth = o.borderWidth; borderOpacity = o.borderOpacity
